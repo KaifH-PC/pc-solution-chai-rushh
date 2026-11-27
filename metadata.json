@@ -1,0 +1,6 @@
+{
+  "name": "Chai Rush: Forest Temple Run",
+  "description": "A 3D Temple Run-style forest endless runner featuring custom character likenesses, tea bag speed boosts, coin collection, gear upgrades, cosmetic skins, and active abilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
