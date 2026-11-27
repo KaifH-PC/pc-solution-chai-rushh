@@ -290,8 +290,16 @@ export class TempleRunEngine {
     this.scene.environment = this.envRT.texture;
     pmrem.dispose();
 
-    this.camera = new THREE.PerspectiveCamera(58, width / Math.max(1, height), 0.1, 165);
+    const initAspect = width / Math.max(1, height);
+    this.camera = new THREE.PerspectiveCamera(58, initAspect, 0.1, 165);
+    this.currentFov = this.getResponsiveFov(56, 82);
+    this.camera.fov = this.currentFov;
+    this.camera.updateProjectionMatrix();
+    const initTitleCam = this.computeTitleCameraTarget(0);
+    this.camPos.copy(initTitleCam.pos);
+    this.camLook.copy(initTitleCam.look);
     this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camLook);
 
     this.hemiLight = new THREE.HemisphereLight(firstPhase.hemiSky, firstPhase.hemiGround, 0.78);
     this.scene.add(this.hemiLight);
@@ -636,8 +644,11 @@ export class TempleRunEngine {
     this.customerPack.root.visible = true;
     this.customerProximity = 0.38;
 
-    this.camPos.set(0, 4.1, 7.6);
-    this.camLook.set(0, 1.5, -10);
+    this.camPos.set(0, this.getGameplayChaseY(), this.getGameplayChaseZ());
+    this.camLook.set(0, 1.55, -11);
+    this.currentFov = this.getResponsiveFov(58, 80);
+    this.camera.fov = this.currentFov;
+    this.camera.updateProjectionMatrix();
     this.setPhase('playing');
     const st = getStreetPhase(this.streetPhase);
     this.showBanner(
@@ -711,8 +722,8 @@ export class TempleRunEngine {
     this.customerPack.root.visible = true;
 
     this.resetWorldSegments();
-    this.camPos.set(0, 4.1, 7.6);
-    this.camLook.set(0, 1.5, -10);
+    this.camPos.set(0, this.getGameplayChaseY(), this.getGameplayChaseZ());
+    this.camLook.set(0, 1.55, -11);
     this.setPhase('playing');
 
     if (result.tier === 'vip_tray') {
@@ -756,7 +767,7 @@ export class TempleRunEngine {
     this.inCoinDashLoop = true;
     this.leg = 'to_teashop';
     this.legDistance = 0;
-    this.customLegTarget = 115; // Punchy quick coin loop!
+    this.customLegTarget = 240; // Punchy extra coin-harvest loop scaled for longer legs!
     this.stumbleWarningTimer = 0;
     this.invulnerableTimer = 1.1;
     this.customerProximity = 0.34;
@@ -774,8 +785,8 @@ export class TempleRunEngine {
     this.customerPack.root.visible = true;
 
     this.resetWorldSegments();
-    this.camPos.set(0, 4.1, 7.6);
-    this.camLook.set(0, 1.5, -10);
+    this.camPos.set(0, this.getGameplayChaseY(), this.getGameplayChaseZ());
+    this.camLook.set(0, 1.55, -11);
     this.setPhase('playing');
     this.audio.playAbility();
     this.showBanner('QUICK COIN DASH LOOP!', 'Grab coins along the lane to afford fresh chai!');
@@ -1244,9 +1255,8 @@ export class TempleRunEngine {
     animateBossRig(this.bossRig, 'idle', this.runAnimTime);
 
     const sway = Math.sin(this.runAnimTime * 0.55) * 0.45;
-    _vec3A.set(sway, 2.35, 5.2);
-    _vec3B.set(0.1, 2.05, -2.5);
-    this.dampCamera(_vec3A, _vec3B, 56, dt, 4);
+    const titleCam = this.computeTitleCameraTarget(sway);
+    this.dampCamera(titleCam.pos, titleCam.look, titleCam.fov, dt, 4.5);
   }
 
   private updateIntroCutscene(dt: number): void {
@@ -1291,9 +1301,18 @@ export class TempleRunEngine {
         baseZ: 3.4,
       });
 
-      _vec3A.set(0, THREE.MathUtils.lerp(2.2, 4.1, whip), THREE.MathUtils.lerp(2.6, 7.6, whip));
-      _vec3B.set(0, 1.5, THREE.MathUtils.lerp(0, -10, whip));
-      this.dampCamera(_vec3A, _vec3B, THREE.MathUtils.lerp(48, 60, whip), dt, 10);
+      const chaseY = this.getGameplayChaseY();
+      const chaseZ = this.getGameplayChaseZ();
+      const p = this.getPortraitFactor();
+      _vec3A.set(0, THREE.MathUtils.lerp(2.2 + p * 0.4, chaseY, whip), THREE.MathUtils.lerp(2.6 + p * 1.1, chaseZ, whip));
+      _vec3B.set(0, 1.55, THREE.MathUtils.lerp(0, -11, whip));
+      this.dampCamera(
+        _vec3A,
+        _vec3B,
+        THREE.MathUtils.lerp(this.getResponsiveFov(48, 72), this.getResponsiveFov(58, 80), whip),
+        dt,
+        10
+      );
     }
 
     if (this.introTimer <= 0) {
@@ -1335,9 +1354,10 @@ export class TempleRunEngine {
     });
 
     const orbit = Math.sin(this.runAnimTime * 0.6) * 0.8;
-    _vec3A.set(2.4 + orbit, 3.05, 6.4);
-    _vec3B.set(0, 1.8, -1.6);
-    this.dampCamera(_vec3A, _vec3B, 56, dt, 5);
+    const p = this.getPortraitFactor();
+    _vec3A.set((2.4 + orbit) * (1 - p * 0.35), 3.05 + p * 0.85, 6.4 * (1 + p * 0.38));
+    _vec3B.set(0, 1.8 + p * 0.35, -1.6);
+    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(56, 80), dt, 5);
   }
 
   private updateFunnyUTurnCutscene(dt: number): void {
@@ -1385,19 +1405,20 @@ export class TempleRunEngine {
     });
 
     const camAngle = progress * Math.PI * 1.35;
+    const uturnRadius = 5.2 * (1 + this.getPortraitFactor() * 0.32);
     _vec3A.set(
-      this.playerX + Math.sin(camAngle) * 5.2,
-      2.75 + hopY * 0.3,
-      Math.cos(camAngle) * 5.2
+      this.playerX + Math.sin(camAngle) * uturnRadius,
+      2.75 + hopY * 0.3 + this.getPortraitFactor() * 0.5,
+      Math.cos(camAngle) * uturnRadius
     );
     _vec3B.set(this.playerX, 1.35 + hopY * 0.4, 0);
-    this.dampCamera(_vec3A, _vec3B, 56, dt, 10);
+    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(56, 78), dt, 10);
 
     if (this.uturnTimer <= 0) {
       this.flyingCup.visible = false;
       this.leg = 'to_teashop';
       this.customLegTarget = null;
-      this.legDistance = Math.floor(getStreetPhase(this.streetPhase).legDistance * 0.42);
+      this.legDistance = Math.floor(getStreetPhase(this.streetPhase).legDistance * 0.55);
       this.teaHitsRemaining = MAX_TEA_HITS;
       this.stumbleWarningTimer = 0;
       this.invulnerableTimer = 1.4;
@@ -1405,7 +1426,7 @@ export class TempleRunEngine {
       this.runner.root.position.set(this.playerX, 0, 0);
       this.runner.root.rotation.y = Math.PI;
       this.resetWorldSegments();
-      this.camPos.set(this.playerX * 0.5, 4.1, 7.6);
+      this.camPos.set(this.playerX * 0.5, this.getGameplayChaseY(), this.getGameplayChaseZ());
       this.setPhase('playing');
       this.showBanner('BACK TO SHARMA CHAI STALL!', 'Grab a fresh cup before the Boss gets mad!');
       this.emitHud();
@@ -1470,9 +1491,10 @@ export class TempleRunEngine {
     }
 
     const sway = Math.sin(this.runAnimTime * 0.7) * 0.35;
-    _vec3A.set(sway, 2.3, 5.0);
-    _vec3B.set(0.05, 1.85, -1.2);
-    this.dampCamera(_vec3A, _vec3B, 54, dt, 5);
+    const p = this.getPortraitFactor();
+    _vec3A.set(sway, 2.3 + p * 0.85, 5.0 * (1 + p * 0.48));
+    _vec3B.set(0.05, 1.85 + p * 0.35, -1.2);
+    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(54, 80), dt, 5);
   }
 
   private updateCaughtCryingScene(dt: number): void {
@@ -1493,9 +1515,10 @@ export class TempleRunEngine {
     });
 
     const sway = Math.sin(this.runAnimTime * 0.8) * 0.32;
-    _vec3A.set(0.2 + sway, 2.35, 3.65);
-    _vec3B.set(0.35, 1.45, -1.75);
-    this.dampCamera(_vec3A, _vec3B, 52, dt, 5);
+    const p = this.getPortraitFactor();
+    _vec3A.set(0.2 + sway, 2.35 + p * 0.7, 3.65 * (1 + p * 0.52));
+    _vec3B.set(0.35, 1.45 + p * 0.25, -1.75);
+    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(52, 78), dt, 5);
   }
 
   private updatePlaying(dt: number): void {
@@ -1751,9 +1774,14 @@ export class TempleRunEngine {
     const shakeX = (Math.random() - 0.5) * this.screenShake * 0.55;
     const shakeY = (Math.random() - 0.5) * this.screenShake * 0.4;
 
-    const targetFov =
-      58 + (this.teaRushTimer > 0 ? 7 : 0) + (this.isTurboDashActive() ? 10 : 0) + speedRatio * 5;
-    _vec3A.set(this.playerX * 0.62 + shakeX, 4.15 + this.playerY * 0.32 + shakeY, 7.65);
+    const baseChaseFov = this.getResponsiveFov(58, 80);
+    const targetFov = Math.min(
+      88,
+      baseChaseFov + (this.teaRushTimer > 0 ? 6 : 0) + (this.isTurboDashActive() ? 8 : 0) + speedRatio * 4
+    );
+    const chaseY = this.getGameplayChaseY();
+    const chaseZ = this.getGameplayChaseZ();
+    _vec3A.set(this.playerX * 0.62 + shakeX, chaseY + this.playerY * 0.32 + shakeY, chaseZ);
     _vec3B.set(this.playerX * 0.35, 1.55 + this.playerY * 0.25, -11);
     this.dampCamera(_vec3A, _vec3B, targetFov, dt, 10);
   }
@@ -1836,6 +1864,60 @@ export class TempleRunEngine {
     }
 
     this.enterCaughtForcedToWork();
+  }
+
+  /** 0 on desktop/landscape (aspect >= 1), smoothly scaling up to 1 on narrow portrait phones */
+  private getPortraitFactor(): number {
+    const aspect = this.camera?.aspect ?? 1;
+    if (aspect >= 1) return 0;
+    return THREE.MathUtils.clamp((1 - aspect) / 0.55, 0, 1);
+  }
+
+  /** Responsive horizontal-FOV compensation so narrow phones frame the full street & storefront */
+  private getResponsiveFov(baseFov: number, maxPortraitFov = 82): number {
+    const p = this.getPortraitFactor();
+    if (p <= 0) return baseFov;
+    const widened = Math.min(maxPortraitFov, baseFov + 26);
+    return THREE.MathUtils.lerp(baseFov, widened, p);
+  }
+
+  /** Pulls gameplay chase camera back ~32% on portrait phones to reveal all 3 lanes + bazaar buildings */
+  private getGameplayChaseZ(): number {
+    return 7.65 * (1 + this.getPortraitFactor() * 0.34);
+  }
+
+  private getGameplayChaseY(): number {
+    return 4.15 * (1 + this.getPortraitFactor() * 0.24);
+  }
+
+  /** Computes Title Screen camera so the full PC Solution storefront + Canon boxes fit cleanly on both desktop and portrait phones */
+  private computeTitleCameraTarget(sway: number): {
+    pos: THREE.Vector3;
+    look: THREE.Vector3;
+    fov: number;
+  } {
+    const aspect = this.camera?.aspect ?? 1;
+    const p = this.getPortraitFactor();
+    const fov = this.getResponsiveFov(56, 82);
+
+    let titleZ = 5.2;
+    let titleY = 2.35;
+    let lookY = 2.05;
+
+    if (aspect < 1) {
+      // Storefront sign (10.8m wide, ±5.4m) + stacked Canon boxes sit around z = -2.62.
+      // Pull back smoothly (~35%+ and up to exact horizontal fit on narrow phones) so both sides fit cleanly!
+      const halfTanV = Math.tan(THREE.MathUtils.degToRad(fov * 0.5));
+      const neededDist = 5.75 / Math.max(0.18, halfTanV * aspect);
+      const minPullbackZ = 5.2 * (1 + p * 0.35);
+      titleZ = Math.max(minPullbackZ, Math.min(12.6, -2.62 + neededDist));
+      titleY = 2.35 + p * 1.05;
+      lookY = 2.05 + p * 0.75;
+    }
+
+    _vec3A.set(sway * (1 - p * 0.55), titleY, titleZ);
+    _vec3B.set(0.08 * (1 - p * 0.6), lookY, -2.5);
+    return { pos: _vec3A, look: _vec3B, fov };
   }
 
   private dampCamera(
@@ -2002,6 +2084,18 @@ export class TempleRunEngine {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
+    if (this.phase === 'title') {
+      const titleCam = this.computeTitleCameraTarget(0);
+      this.camPos.copy(titleCam.pos);
+      this.camLook.copy(titleCam.look);
+      this.currentFov = titleCam.fov;
+      this.camera.fov = titleCam.fov;
+      this.camera.position.copy(this.camPos);
+      this.camera.lookAt(this.camLook);
+    } else if (this.phase === 'playing') {
+      this.currentFov = this.getResponsiveFov(58, 80);
+      this.camera.fov = this.currentFov;
+    }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   };

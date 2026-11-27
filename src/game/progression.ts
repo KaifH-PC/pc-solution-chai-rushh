@@ -322,9 +322,9 @@ export function getStreetPhase(phaseNumber: number): StreetPhase {
     ...base,
     phase: clamped,
     name: `Grand Bazaar Wave ${clamped}`,
-    legDistance: base.legDistance + extra * 55,
+    legDistance: base.legDistance + extra * 150,
     chaiPrice: base.chaiPrice + extra * 10,
-    parTimeSec: base.parTimeSec + extra * 4,
+    parTimeSec: base.parTimeSec + extra * 10,
     baseSpeed: Math.min(39, base.baseSpeed + extra * 1.4),
     trafficSpeed: Math.min(18, base.trafficSpeed + extra * 0.9),
   };
@@ -786,28 +786,23 @@ export function generateSegmentPattern(
   }
 
   const phaseDef = getStreetPhase(streetPhase);
-  // Target ~1.72x base chaiPrice along safe path across all segments in Leg 1 (~legDistance / 18 segments)
-  const totalLegSegments = Math.max(12, Math.floor(phaseDef.legDistance / 18));
-  const targetSafeCoinsPerSeg = Math.max(
-    2,
-    Math.min(5, Math.round((phaseDef.chaiPrice * 1.72) / totalLegSegments))
-  );
+  const totalLegSegments = Math.max(24, Math.floor(phaseDef.legDistance / 18));
 
-  // Segments 1..2: Welcoming runway with easy coin line & first steaming Tea Cup
+  // Segments 1..2: Welcoming runway with an inviting starter coin arc & first steaming Tea Cup
   if (segmentIndex < 3) {
-    const count = Math.max(3, targetSafeCoinsPerSeg);
-    for (let i = 0; i < count; i++) {
+    if (segmentIndex === 1) {
+      for (let i = 0; i < 4; i++) {
+        pickups.push({
+          lane: 1,
+          zOffset: -3.0 - i * 3.1,
+          y: 0.95,
+          type: 'coin',
+        });
+      }
+    } else {
       pickups.push({
         lane: 1,
-        zOffset: -2.6 - i * 2.8,
-        y: 0.95,
-        type: 'coin',
-      });
-    }
-    if (segmentIndex === 2) {
-      pickups.push({
-        lane: 1,
-        zOffset: -15.5,
+        zOffset: -12.5,
         y: 1.2,
         type: 'teacup',
       });
@@ -830,8 +825,18 @@ export function generateSegmentPattern(
     'monitor_carriers',
   ];
 
-  const twoBlockChance = Math.min(0.76, 0.38 + (streetPhase - 1) * 0.1);
-  const blockerCount = rng() < twoBlockChance ? 2 : 1;
+  // Natural Temple Run / Subway Surfers wave pacing: every 5th segment is a lighter breather straightaway
+  const isBreatherWave = segmentIndex % 5 === 0;
+  const twoBlockChance = isBreatherWave
+    ? 0
+    : Math.min(0.72, 0.34 + (streetPhase - 1) * 0.09);
+  const blockerCount = isBreatherWave
+    ? rng() < 0.55
+      ? 1
+      : 0
+    : rng() < twoBlockChance
+      ? 2
+      : 1;
 
   const candidateLanes = [0, 1, 2].filter((l) => l !== safeLane);
   if (rng() < 0.5) candidateLanes.reverse();
@@ -844,13 +849,13 @@ export function generateSegmentPattern(
     obstacles.push({
       lane,
       kind,
-      zOffset: -7.5,
+      zOffset: -8.0,
     });
   }
 
   // Optionally put a jumpable low obstacle or slide-under high obstacle in the safe lane (100% passable!)
   let safeLaneAction: 'clear' | 'jump' | 'slide' = 'clear';
-  if (rng() < (streetPhase >= 2 ? 0.42 : 0.32)) {
+  if (!isBreatherWave && rng() < (streetPhase >= 2 ? 0.38 : 0.3)) {
     const isJump = rng() < 0.54;
     const actionKind = isJump
       ? JUMPABLE_OBSTACLES[Math.floor(rng() * JUMPABLE_OBSTACLES.length)]
@@ -858,54 +863,62 @@ export function generateSegmentPattern(
     obstacles.push({
       lane: safeLane,
       kind: actionKind,
-      zOffset: -7.5,
+      zOffset: -8.0,
     });
     safeLaneAction = isJump ? 'jump' : 'slide';
   }
 
-  // Primary guiding coin arc along the safe lane (~1.7x base chai price across Leg 1!)
-  // For Phase 1 (chaiPrice=15, ~15 segments): targetSafeCoinsPerSeg = 2, plus 3 on action arcs -> ~26-30 safe coins!
-  const safeCoinsCount =
-    safeLaneAction !== 'clear' ? Math.max(3, targetSafeCoinsPerSeg + 1) : targetSafeCoinsPerSeg;
-  const startZ = -3.0;
-  const spacing = safeCoinsCount > 3 ? 2.5 : 3.2;
+  // Spread coin arcs evenly across the longer 2.8x street so 1x (15c), 2x (30c), and 3x (45c) stay fair & exciting!
+  // Safe-lane arcs yield ~2.0x-2.4x base chaiPrice; bonus side-lane arcs bring total street supply to ~3.4x-4.0x!
+  const safeArcStride = Math.max(
+    2,
+    Math.round((totalLegSegments * 3.4) / (phaseDef.chaiPrice * 2.25))
+  );
+  const spawnSafeArc = segmentIndex % safeArcStride === 1;
 
-  for (let i = 0; i < safeCoinsCount; i++) {
-    const zOffset = startZ - i * spacing;
-    let y = 0.95;
-    if (safeLaneAction === 'jump') {
-      const t = Math.max(0, 1 - Math.abs(zOffset + 7.5) / 5.4);
-      y = 0.95 + t * 1.48;
-    } else if (safeLaneAction === 'slide') {
-      y = 0.62;
-    }
-    pickups.push({
-      lane: safeLane,
-      zOffset,
-      y,
-      type: 'coin',
-    });
-  }
+  if (spawnSafeArc) {
+    const safeArcCount = safeLaneAction !== 'clear' ? 4 : streetPhase >= 3 ? 4 : 3;
+    const startZ = -2.6;
+    const spacing = safeArcCount >= 4 ? 3.2 : 3.8;
 
-  // Optional bonus side-lane coin line (for players hunting Tier 2 = 30c / Tier 3 = 45c!)
-  const openSideLanes = [0, 1, 2].filter((l) => l !== safeLane && !blockedLanes.has(l));
-  if (openSideLanes.length > 0 && (segmentIndex % 2 === 1 || rng() < 0.55)) {
-    const bonusLane = openSideLanes[0];
-    const bonusCount = streetPhase >= 2 ? 3 : 2;
-    for (let i = 0; i < bonusCount; i++) {
+    for (let i = 0; i < safeArcCount; i++) {
+      const zOffset = startZ - i * spacing;
+      let y = 0.95;
+      if (safeLaneAction === 'jump') {
+        const t = Math.max(0, 1 - Math.abs(zOffset + 8.0) / 5.6);
+        y = 0.95 + t * 1.48;
+      } else if (safeLaneAction === 'slide') {
+        y = 0.62;
+      }
       pickups.push({
-        lane: bonusLane,
-        zOffset: -4.2 - i * 3.1,
-        y: 0.95,
+        lane: safeLane,
+        zOffset,
+        y,
         type: 'coin',
       });
     }
+  } else {
+    // Alternate offset segments offer risk-reward bonus side-lane coin arcs (great for chasing Tier 2 & Tier 3 VIP Tray!)
+    const openSideLanes = [0, 1, 2].filter((l) => l !== safeLane && !blockedLanes.has(l));
+    const bonusPhase = (segmentIndex + Math.floor(safeArcStride / 2)) % safeArcStride === 1;
+    if (openSideLanes.length > 0 && bonusPhase) {
+      const bonusLane = openSideLanes[0];
+      const bonusCount = streetPhase >= 2 ? 4 : 3;
+      for (let i = 0; i < bonusCount; i++) {
+        pickups.push({
+          lane: bonusLane,
+          zOffset: -3.2 - i * 3.3,
+          y: 0.95,
+          type: 'coin',
+        });
+      }
+    }
   }
 
-  // Spawn steaming Tea Cups regularly to boost sprint speed & elevate Tea Taste!
-  const spawnTeaCup = segmentIndex % 3 === 1 || (segmentIndex % 2 === 0 && rng() < 0.42);
+  // Spread steaming Tea Cups cleanly across the longer street (~7-9 cups per leg)
+  const spawnTeaCup = segmentIndex % 6 === 2;
   if (spawnTeaCup) {
-    const teaLane = rng() < 0.72 ? safeLane : Math.floor(rng() * 3);
+    const teaLane = rng() < 0.75 ? safeLane : Math.floor(rng() * 3);
     pickups.push({
       lane: teaLane,
       zOffset: -15.6,
