@@ -9,6 +9,7 @@ import {
   GearId,
   ObstacleKind,
   PlayerMood,
+  PowerUpKind,
   RunLeg,
   SaveData,
   SKINS,
@@ -65,6 +66,7 @@ export function createDefaultSaveData(): SaveData {
     equippedAbility: 'tea_shield',
     unlockedAbilities: ['tea_shield'],
     muted: false,
+    hasSeenControlsHint: false,
   };
 }
 
@@ -152,6 +154,7 @@ export function loadSaveData(): SaveData {
       equippedAbility,
       unlockedAbilities,
       muted: Boolean(parsed.muted),
+      hasSeenControlsHint: Boolean(parsed.hasSeenControlsHint),
     };
   } catch {
     return fallback;
@@ -758,7 +761,8 @@ export interface SpawnedPickupSpec {
   lane: number;
   zOffset: number;
   y: number;
-  type: 'coin' | 'teacup';
+  type: 'coin' | 'teacup' | 'powerup';
+  powerUpKind?: PowerUpKind;
 }
 
 export interface SegmentPattern {
@@ -825,18 +829,26 @@ export function generateSegmentPattern(
     'monitor_carriers',
   ];
 
-  // Natural Temple Run / Subway Surfers wave pacing: every 5th segment is a lighter breather straightaway
+  // Varied Indian Street Wave Rhythms across the extended 2.8x legs:
+  // - Every 5th segment: breather straightaway with coin sweep
+  // - Every 7th segment (offset 4): exciting Jump-then-Slide sequential combo in safe lane!
+  // - Every 6th segment (offset 3): offset oncoming Rickshaw / CPU Scooter weave!
   const isBreatherWave = segmentIndex % 5 === 0;
+  const isJumpSlideCombo = !isBreatherWave && segmentIndex >= 4 && segmentIndex % 7 === 4;
+  const isVehicleWeave = !isBreatherWave && !isJumpSlideCombo && segmentIndex >= 5 && segmentIndex % 6 === 3;
+
   const twoBlockChance = isBreatherWave
     ? 0
-    : Math.min(0.72, 0.34 + (streetPhase - 1) * 0.09);
+    : Math.min(0.74, 0.36 + (streetPhase - 1) * 0.09);
   const blockerCount = isBreatherWave
     ? rng() < 0.55
       ? 1
       : 0
-    : rng() < twoBlockChance
+    : isVehicleWeave
       ? 2
-      : 1;
+      : rng() < twoBlockChance
+        ? 2
+        : 1;
 
   const candidateLanes = [0, 1, 2].filter((l) => l !== safeLane);
   if (rng() < 0.5) candidateLanes.reverse();
@@ -844,18 +856,36 @@ export function generateSegmentPattern(
   const chosenLanes = candidateLanes.slice(0, blockerCount);
   const blockedLanes = new Set<number>(chosenLanes);
 
-  for (const lane of chosenLanes) {
-    const kind = allBlockerHazards[Math.floor(rng() * allBlockerHazards.length)];
-    obstacles.push({
-      lane,
-      kind,
-      zOffset: -8.0,
+  if (isVehicleWeave) {
+    // Offset oncoming rickshaw / CPU delivery scooter wave for high-energy lane weaving!
+    chosenLanes.forEach((lane, idx) => {
+      const kind: ObstacleKind = (segmentIndex + idx) % 2 === 0 ? 'rickshaw' : 'cpu_scooter';
+      obstacles.push({
+        lane,
+        kind,
+        zOffset: idx === 0 ? -4.5 : -12.6,
+      });
     });
+  } else {
+    for (const lane of chosenLanes) {
+      const kind = allBlockerHazards[Math.floor(rng() * allBlockerHazards.length)];
+      obstacles.push({
+        lane,
+        kind,
+        zOffset: -8.0,
+      });
+    }
   }
 
-  // Optionally put a jumpable low obstacle or slide-under high obstacle in the safe lane (100% passable!)
-  let safeLaneAction: 'clear' | 'jump' | 'slide' = 'clear';
-  if (!isBreatherWave && rng() < (streetPhase >= 2 ? 0.38 : 0.3)) {
+  // Safe lane action: either Jump-then-Slide combo, single jump/slide obstacle, or clean sprint!
+  let safeLaneAction: 'clear' | 'jump' | 'slide' | 'jump_slide_combo' = 'clear';
+  if (isJumpSlideCombo) {
+    const lowKind = JUMPABLE_OBSTACLES[Math.floor(rng() * JUMPABLE_OBSTACLES.length)];
+    const highKind = SLIDEABLE_OBSTACLES[Math.floor(rng() * SLIDEABLE_OBSTACLES.length)];
+    obstacles.push({ lane: safeLane, kind: lowKind, zOffset: -4.2 });
+    obstacles.push({ lane: safeLane, kind: highKind, zOffset: -13.0 });
+    safeLaneAction = 'jump_slide_combo';
+  } else if (!isBreatherWave && !isVehicleWeave && rng() < (streetPhase >= 2 ? 0.4 : 0.32)) {
     const isJump = rng() < 0.54;
     const actionKind = isJump
       ? JUMPABLE_OBSTACLES[Math.floor(rng() * JUMPABLE_OBSTACLES.length)]
@@ -869,33 +899,41 @@ export function generateSegmentPattern(
   }
 
   // Spread coin arcs evenly across the longer 2.8x street so 1x (15c), 2x (30c), and 3x (45c) stay fair & exciting!
-  // Safe-lane arcs yield ~2.0x-2.4x base chaiPrice; bonus side-lane arcs bring total street supply to ~3.4x-4.0x!
   const safeArcStride = Math.max(
     2,
     Math.round((totalLegSegments * 3.4) / (phaseDef.chaiPrice * 2.25))
   );
-  const spawnSafeArc = segmentIndex % safeArcStride === 1;
+  const spawnSafeArc = segmentIndex % safeArcStride === 1 || safeLaneAction === 'jump_slide_combo';
 
   if (spawnSafeArc) {
-    const safeArcCount = safeLaneAction !== 'clear' ? 4 : streetPhase >= 3 ? 4 : 3;
-    const startZ = -2.6;
-    const spacing = safeArcCount >= 4 ? 3.2 : 3.8;
+    if (safeLaneAction === 'jump_slide_combo') {
+      // Guiding coins: high arc over the jump obstacle (-4.2) then low duck coins under the slide obstacle (-13.0)!
+      pickups.push({ lane: safeLane, zOffset: -2.4, y: 1.55, type: 'coin' });
+      pickups.push({ lane: safeLane, zOffset: -4.2, y: 2.25, type: 'coin' });
+      pickups.push({ lane: safeLane, zOffset: -6.2, y: 1.4, type: 'coin' });
+      pickups.push({ lane: safeLane, zOffset: -11.4, y: 0.62, type: 'coin' });
+      pickups.push({ lane: safeLane, zOffset: -13.2, y: 0.62, type: 'coin' });
+    } else {
+      const safeArcCount = safeLaneAction !== 'clear' ? 4 : streetPhase >= 3 ? 4 : 3;
+      const startZ = -2.6;
+      const spacing = safeArcCount >= 4 ? 3.2 : 3.8;
 
-    for (let i = 0; i < safeArcCount; i++) {
-      const zOffset = startZ - i * spacing;
-      let y = 0.95;
-      if (safeLaneAction === 'jump') {
-        const t = Math.max(0, 1 - Math.abs(zOffset + 8.0) / 5.6);
-        y = 0.95 + t * 1.48;
-      } else if (safeLaneAction === 'slide') {
-        y = 0.62;
+      for (let i = 0; i < safeArcCount; i++) {
+        const zOffset = startZ - i * spacing;
+        let y = 0.95;
+        if (safeLaneAction === 'jump') {
+          const t = Math.max(0, 1 - Math.abs(zOffset + 8.0) / 5.6);
+          y = 0.95 + t * 1.48;
+        } else if (safeLaneAction === 'slide') {
+          y = 0.62;
+        }
+        pickups.push({
+          lane: safeLane,
+          zOffset,
+          y,
+          type: 'coin',
+        });
       }
-      pickups.push({
-        lane: safeLane,
-        zOffset,
-        y,
-        type: 'coin',
-      });
     }
   } else {
     // Alternate offset segments offer risk-reward bonus side-lane coin arcs (great for chasing Tier 2 & Tier 3 VIP Tray!)
@@ -915,16 +953,35 @@ export function generateSegmentPattern(
     }
   }
 
-  // Spread steaming Tea Cups cleanly across the longer street (~7-9 cups per leg)
-  const spawnTeaCup = segmentIndex % 6 === 2;
-  if (spawnTeaCup) {
-    const teaLane = rng() < 0.75 ? safeLane : Math.floor(rng() * 3);
+  // Periodic glowing 3D collectible lane Power-Ups cycling all 4 kinds cleanly on reachable lanes!
+  const powerUpCycle: readonly PowerUpKind[] = [
+    'chai_board',
+    'coin_magnet',
+    'kadak_boost',
+    'extra_tea',
+  ];
+  const spawnPowerUp = segmentIndex >= 4 && segmentIndex % 8 === 4;
+  if (spawnPowerUp) {
+    const kind = powerUpCycle[Math.floor((segmentIndex - 4) / 8) % powerUpCycle.length];
     pickups.push({
-      lane: teaLane,
-      zOffset: -15.6,
+      lane: safeLane,
+      zOffset: -16.1,
       y: 1.25,
-      type: 'teacup',
+      type: 'powerup',
+      powerUpKind: kind,
     });
+  } else {
+    // Spread steaming Tea Cups cleanly across the longer street (~7-9 cups per leg)
+    const spawnTeaCup = segmentIndex % 6 === 2;
+    if (spawnTeaCup) {
+      const teaLane = rng() < 0.75 ? safeLane : Math.floor(rng() * 3);
+      pickups.push({
+        lane: teaLane,
+        zOffset: -15.6,
+        y: 1.25,
+        type: 'teacup',
+      });
+    }
   }
 
   return { obstacles, pickups };

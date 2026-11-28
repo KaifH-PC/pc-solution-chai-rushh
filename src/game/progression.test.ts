@@ -334,3 +334,40 @@ test('Leg 1 street patterns always leave a solvable lane and yield >= 1.6x base 
     );
   }
 });
+
+test('varied street waves spawn all 4 collectible 3D power-up types and jump-then-slide combos', () => {
+  let seed = 4242;
+  const rng = () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+
+  const seenPowerUps = new Set<string>();
+  let sawJumpSlideCombo = false;
+
+  for (let seg = 1; seg <= 40; seg++) {
+    const pattern = generateSegmentPattern(seg, 1, rng);
+    for (const p of pattern.pickups) {
+      if (p.type === 'powerup' && p.powerUpKind) {
+        seenPowerUps.add(p.powerUpKind);
+      }
+    }
+    const lowInLane = pattern.obstacles.find((o) => JUMPABLE_OBSTACLES.includes(o.kind));
+    if (lowInLane) {
+      const highSameLane = pattern.obstacles.find(
+        (o) =>
+          o.lane === lowInLane.lane &&
+          SLIDEABLE_OBSTACLES.includes(o.kind) &&
+          Math.abs(o.zOffset - lowInLane.zOffset) > 6
+      );
+      if (highSameLane) sawJumpSlideCombo = true;
+    }
+  }
+
+  assert.ok(sawJumpSlideCombo, 'Expected sequential jump-then-slide combo segments');
+  assert.deepEqual(
+    Array.from(seenPowerUps).sort(),
+    ['chai_board', 'coin_magnet', 'extra_tea', 'kadak_boost']
+  );
+});
+

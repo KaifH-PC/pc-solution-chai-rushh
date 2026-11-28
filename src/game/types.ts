@@ -42,6 +42,8 @@ export type GearId = 'sneakers' | 'chai_flask' | 'magnet_charm' | 'bamboo_ward';
 
 export type AbilityId = 'tea_shield' | 'coin_magnet' | 'chai_dash' | 'second_wind';
 
+export type PowerUpKind = 'chai_board' | 'coin_magnet' | 'kadak_boost' | 'extra_tea';
+
 /**
  * 10 Authentic Indian Computer-Market Street Obstacles:
  * - Jumpable Low: cat6_cables, printer_boxes, smoking_ups, stray_dog
@@ -176,6 +178,7 @@ export interface SaveData {
   equippedAbility: AbilityId;
   unlockedAbilities: AbilityId[];
   muted: boolean;
+  hasSeenControlsHint?: boolean;
 }
 
 export interface RunStats {
@@ -232,6 +235,10 @@ export interface RunStats {
   bannerSubtext: string | null;
   calloutText: string | null;
   calloutAccent: string | null;
+  storedPowerUp: PowerUpKind | null;
+  activePowerUpKind: PowerUpKind | null;
+  lastPowerUpLabel: string | null;
+  lastPowerUpAccent: string | null;
 }
 
 export const CHARACTERS: CharacterProfile[] = [
@@ -456,14 +463,14 @@ export const STREET_PHASES: StreetPhase[] = [
     parTimeSec: 82,
     baseSpeed: 19.5,
     trafficSpeed: 6.5,
-    skyTop: 0x7cb8e0,
-    fogColor: 0xdcc4a2,
-    fogDensity: 0.0125,
-    sunColor: 0xffe4b0,
-    sunIntensity: 1.9,
-    hemiSky: 0x9cd2f5,
-    hemiGround: 0x5c4738,
-    roadTint: 0x3b3d42,
+    skyTop: 0x4c8cc9,
+    fogColor: 0xe6bc88,
+    fogDensity: 0.0108,
+    sunColor: 0xffd996,
+    sunIntensity: 2.35,
+    hemiSky: 0xffe0ad,
+    hemiGround: 0x6b462c,
+    roadTint: 0x2a2d35,
   },
   {
     phase: 2,
@@ -474,14 +481,14 @@ export const STREET_PHASES: StreetPhase[] = [
     parTimeSec: 94,
     baseSpeed: 22.2,
     trafficSpeed: 8.4,
-    skyTop: 0x6ca9d8,
-    fogColor: 0xe0bd8e,
-    fogDensity: 0.0125,
-    sunColor: 0xffd796,
-    sunIntensity: 2.05,
-    hemiSky: 0xaad8f5,
-    hemiGround: 0x664830,
-    roadTint: 0x383a40,
+    skyTop: 0x4481bf,
+    fogColor: 0xe4b57e,
+    fogDensity: 0.0108,
+    sunColor: 0xffd285,
+    sunIntensity: 2.4,
+    hemiSky: 0xffdba4,
+    hemiGround: 0x6c462b,
+    roadTint: 0x282b33,
   },
   {
     phase: 3,

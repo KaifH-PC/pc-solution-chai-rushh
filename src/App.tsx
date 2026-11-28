@@ -24,6 +24,33 @@ import { GameHud } from './components/GameHud';
 import { TeaShopModal } from './components/TeaShopModal';
 import { StatusModal } from './components/StatusModal';
 import { ShopModal } from './components/ShopModal';
+import { VideoCutsceneOverlay } from './components/VideoCutsceneOverlay';
+
+const VIDEO_PATHS = {
+  intro: '/assets/aistudio/intro.mp4',
+  allChai: '/assets/aistudio/ending-all-chai.mp4',
+  bossAndMe: '/assets/aistudio/ending-boss-and-me.mp4',
+  bossOnly: '/assets/aistudio/ending-boss-only.mp4',
+  caught: '/assets/aistudio/ending-caught.mp4',
+} as const;
+
+interface ActiveCutscene {
+  mode: 'intro_start' | 'intro_preview' | 'ending';
+  src: string;
+}
+
+function resolveEndingVideoSrc(phase: GamePhase, latestStats: RunStats): string {
+  if (phase === 'caught') {
+    return VIDEO_PATHS.caught;
+  }
+  if (latestStats.chaiTier === 'vip_tray' || latestStats.bossVerdict === 'vip_party') {
+    return VIDEO_PATHS.allChai;
+  }
+  if (latestStats.chaiTier === 'boss_and_me' || latestStats.bossVerdict === 'double_win') {
+    return VIDEO_PATHS.bossAndMe;
+  }
+  return VIDEO_PATHS.bossOnly;
+}
 
 const INITIAL_STATS: RunStats = {
   score: 0,
@@ -68,6 +95,10 @@ const INITIAL_STATS: RunStats = {
   abilityActiveTimer: 0,
   abilityActiveMax: 6.2,
   secondWindAvailable: false,
+  storedPowerUp: null,
+  activePowerUpKind: null,
+  lastPowerUpLabel: null,
+  lastPowerUpAccent: null,
   isNewBest: false,
   bossVerdict: null,
   playerMood: null,
@@ -84,13 +115,14 @@ const INITIAL_STATS: RunStats = {
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<TempleRunEngine | null>(null);
+  const latestStatsRef = useRef<RunStats>(INITIAL_STATS);
 
   const [save, setSave] = useState<SaveData>(() => loadSaveData());
   const [phase, setPhase] = useState<GamePhase>('title');
   const [stats, setStats] = useState<RunStats>(INITIAL_STATS);
   const [shopOpen, setShopOpen] = useState(false);
+  const [activeCutscene, setActiveCutscene] = useState<ActiveCutscene | null>(null);
 
-  // Sync save state to localStorage and live 3D engine
   const applySaveUpdate = useCallback((updater: (prev: SaveData) => SaveData) => {
     setSave((prev) => {
       const next = updater(prev);
@@ -100,25 +132,36 @@ export default function App() {
     });
   }, []);
 
-  // Keep body data-state synced for clean automation & styling hooks
   useEffect(() => {
-    document.body.dataset.state = shopOpen ? 'shop' : phase;
-  }, [phase, shopOpen]);
+    document.body.dataset.state = activeCutscene
+      ? 'cutscene'
+      : shopOpen
+        ? 'shop'
+        : phase;
+  }, [phase, shopOpen, activeCutscene]);
 
-  // Mount Three.js engine once inside isolated container
   useEffect(() => {
     const mountEl = canvasMountRef.current;
     if (!mountEl) return;
 
     const initialSave = loadSaveData();
     const engine = new TempleRunEngine(mountEl, initialSave, {
-      onPhaseChange: (nextPhase) => setPhase(nextPhase),
-      onStatsChange: (nextStats) => setStats(nextStats),
+      onPhaseChange: (nextPhase) => {
+        setPhase(nextPhase);
+        if (nextPhase === 'stageclear' || nextPhase === 'caught') {
+          engine.setExternalVideoPlaying(true);
+          const videoSrc = resolveEndingVideoSrc(nextPhase, latestStatsRef.current);
+          setActiveCutscene({ mode: 'ending', src: videoSrc });
+        }
+      },
+      onStatsChange: (nextStats) => {
+        latestStatsRef.current = nextStats;
+        setStats(nextStats);
+      },
       onSaveUpdate: (updater) => applySaveUpdate(updater),
     });
     engineRef.current = engine;
 
-    // Support ?autostart=1 for instant gameplay testing
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
       engine.startRun(1, true);
@@ -132,8 +175,26 @@ export default function App() {
 
   const handleStartRun = useCallback(() => {
     setShopOpen(false);
-    engineRef.current?.startRun(1, false);
+    engineRef.current?.prepareAudioUnlock();
+    engineRef.current?.setExternalVideoPlaying(true);
+    setActiveCutscene({ mode: 'intro_start', src: VIDEO_PATHS.intro });
   }, []);
+
+  const handleReplayIntro = useCallback(() => {
+    setShopOpen(false);
+    engineRef.current?.prepareAudioUnlock();
+    engineRef.current?.setExternalVideoPlaying(true);
+    setActiveCutscene({ mode: 'intro_preview', src: VIDEO_PATHS.intro });
+  }, []);
+
+  const handleCutsceneComplete = useCallback(() => {
+    const completed = activeCutscene;
+    setActiveCutscene(null);
+    engineRef.current?.setExternalVideoPlaying(false);
+    if (completed?.mode === 'intro_start') {
+      engineRef.current?.startRun(1, true);
+    }
+  }, [activeCutscene]);
 
   const handleSelectChaiTier = useCallback((tier: ChaiTier) => {
     engineRef.current?.selectChaiTierAndReturn(tier);
@@ -155,6 +216,8 @@ export default function App() {
 
   const handleReturnTitle = useCallback(() => {
     setShopOpen(false);
+    setActiveCutscene(null);
+    engineRef.current?.setExternalVideoPlaying(false);
     engineRef.current?.returnToTitle();
   }, []);
 
@@ -168,6 +231,12 @@ export default function App() {
 
   const handleToggleMute = useCallback(() => {
     applySaveUpdate((prev) => ({ ...prev, muted: !prev.muted }));
+  }, [applySaveUpdate]);
+
+  const handleDismissHints = useCallback(() => {
+    applySaveUpdate((prev) =>
+      prev.hasSeenControlsHint ? prev : { ...prev, hasSeenControlsHint: true }
+    );
   }, [applySaveUpdate]);
 
   const handleSelectCharacter = useCallback(
@@ -198,17 +267,19 @@ export default function App() {
     [applySaveUpdate]
   );
 
-  const showHud = phase === 'playing' || phase === 'intro' || phase === 'uturn';
+  const showHud =
+    !activeCutscene && (phase === 'playing' || phase === 'intro' || phase === 'uturn');
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#1b1410]">
       {/* Isolated WebGL Canvas Container — never re-mounted on React state changes */}
       <div ref={canvasMountRef} className="absolute inset-0 w-full h-full" />
 
-      {phase === 'title' && !shopOpen && (
+      {phase === 'title' && !shopOpen && !activeCutscene && (
         <TitleOverlay
           save={save}
           onStart={handleStartRun}
+          onReplayIntro={handleReplayIntro}
           onOpenShop={() => setShopOpen(true)}
           onSelectCharacter={handleSelectCharacter}
           onToggleMute={handleToggleMute}
@@ -223,10 +294,11 @@ export default function App() {
           onPause={handleTogglePause}
           onToggleMute={handleToggleMute}
           onTriggerAbility={handleTriggerAbility}
+          onDismissHints={handleDismissHints}
         />
       )}
 
-      {phase === 'teashop' && (
+      {phase === 'teashop' && !activeCutscene && (
         <TeaShopModal
           stats={stats}
           onSelectTier={handleSelectChaiTier}
@@ -234,18 +306,20 @@ export default function App() {
         />
       )}
 
-      {(phase === 'paused' || phase === 'stageclear' || phase === 'caught') && !shopOpen && (
-        <StatusModal
-          phase={phase}
-          stats={stats}
-          save={save}
-          onResume={handleTogglePause}
-          onNextPhase={handleNextPhase}
-          onRetry={handleRetry}
-          onOpenShop={() => setShopOpen(true)}
-          onReturnTitle={handleReturnTitle}
-        />
-      )}
+      {(phase === 'paused' || phase === 'stageclear' || phase === 'caught') &&
+        !shopOpen &&
+        !activeCutscene && (
+          <StatusModal
+            phase={phase}
+            stats={stats}
+            save={save}
+            onResume={handleTogglePause}
+            onNextPhase={handleNextPhase}
+            onRetry={handleRetry}
+            onOpenShop={() => setShopOpen(true)}
+            onReturnTitle={handleReturnTitle}
+          />
+        )}
 
       <ShopModal
         open={shopOpen}
@@ -255,6 +329,12 @@ export default function App() {
         onBuyOrEquipSkin={handleBuyOrEquipSkin}
         onUpgradeGear={handleUpgradeGear}
         onBuyOrEquipAbility={handleBuyOrEquipAbility}
+      />
+
+      <VideoCutsceneOverlay
+        src={activeCutscene?.src ?? null}
+        muted={save.muted}
+        onComplete={handleCutsceneComplete}
       />
     </div>
   );

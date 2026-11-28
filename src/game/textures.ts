@@ -26,7 +26,10 @@ function finalizeTexture(
   return tex;
 }
 
-/** 3-Lane Indian bazaar asphalt road texture with dashed white dividers, curbs & subtle grit */
+/**
+ * Rich textured dark asphalt road with fine aggregate grain, subtle hairline pavement cracks,
+ * tire-wear lanes, crisp high-contrast dashed white lane dividers, and solid yellow curb edges.
+ */
 export function createAsphaltRoadTextures(anisotropy: number): {
   map: THREE.CanvasTexture;
   bumpMap: THREE.CanvasTexture;
@@ -34,50 +37,91 @@ export function createAsphaltRoadTextures(anisotropy: number): {
   const [cColor, ctxC] = makeCanvas(512, 512);
   const [cBump, ctxB] = makeCanvas(512, 512);
 
-  ctxC.fillStyle = '#33363c';
+  // Deep charcoal asphalt base
+  ctxC.fillStyle = '#252830';
   ctxC.fillRect(0, 0, 512, 512);
-  ctxB.fillStyle = '#7c7c7c';
+  ctxB.fillStyle = '#787878';
   ctxB.fillRect(0, 0, 512, 512);
 
-  for (let i = 0; i < 4200; i++) {
+  // Fine stone aggregate & asphalt speckle
+  for (let i = 0; i < 7200; i++) {
     const x = Math.random() * 512;
     const y = Math.random() * 512;
-    const v = 38 + Math.floor(Math.random() * 34);
-    ctxC.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
-    ctxC.fillRect(x, y, 2, 2);
-    const bv = 100 + Math.floor(Math.random() * 55);
+    const sz = Math.random() < 0.75 ? 2 : 3;
+    const v = 28 + Math.floor(Math.random() * 34);
+    ctxC.fillStyle = `rgb(${v},${v + 2},${v + 6})`;
+    ctxC.fillRect(x, y, sz, sz);
+    const bv = 92 + Math.floor(Math.random() * 72);
     ctxB.fillStyle = `rgb(${bv},${bv},${bv})`;
-    ctxB.fillRect(x, y, 2, 2);
+    ctxB.fillRect(x, y, sz, sz);
   }
 
-  const leftDust = ctxC.createLinearGradient(0, 0, 48, 0);
-  leftDust.addColorStop(0, 'rgba(182, 148, 106, 0.45)');
-  leftDust.addColorStop(1, 'rgba(182, 148, 106, 0)');
+  // Subtle darker tire-wear tracks along all 3 lane centers
+  for (const cx of [100, 256, 412]) {
+    const wearGrad = ctxC.createLinearGradient(cx - 44, 0, cx + 44, 0);
+    wearGrad.addColorStop(0, 'rgba(12, 14, 18, 0)');
+    wearGrad.addColorStop(0.25, 'rgba(12, 14, 18, 0.28)');
+    wearGrad.addColorStop(0.5, 'rgba(18, 20, 24, 0.1)');
+    wearGrad.addColorStop(0.75, 'rgba(12, 14, 18, 0.28)');
+    wearGrad.addColorStop(1, 'rgba(12, 14, 18, 0)');
+    ctxC.fillStyle = wearGrad;
+    ctxC.fillRect(cx - 44, 0, 88, 512);
+  }
+
+  // Subtle organic pavement hairline cracks (both color & bump)
+  ctxC.strokeStyle = 'rgba(10, 11, 14, 0.58)';
+  ctxC.lineWidth = 1.6;
+  ctxB.strokeStyle = 'rgba(32, 32, 32, 0.85)';
+  ctxB.lineWidth = 2;
+  const crackSeeds = [
+    [76, 38],
+    [224, 196],
+    [378, 128],
+    [142, 368],
+    [438, 392],
+  ];
+  for (const [sx, sy] of crackSeeds) {
+    let px = sx;
+    let py = sy;
+    ctxC.beginPath();
+    ctxB.beginPath();
+    ctxC.moveTo(px, py);
+    ctxB.moveTo(px, py);
+    for (let seg = 0; seg < 6; seg++) {
+      px += (Math.random() - 0.5) * 34;
+      py += 10 + Math.random() * 22;
+      ctxC.lineTo(px, py);
+      ctxB.lineTo(px, py);
+    }
+    ctxC.stroke();
+    ctxB.stroke();
+  }
+
+  // Warm golden dust accumulation right next to the curbs
+  const leftDust = ctxC.createLinearGradient(0, 0, 44, 0);
+  leftDust.addColorStop(0, 'rgba(188, 142, 92, 0.42)');
+  leftDust.addColorStop(1, 'rgba(188, 142, 92, 0)');
   ctxC.fillStyle = leftDust;
-  ctxC.fillRect(0, 0, 48, 512);
+  ctxC.fillRect(0, 0, 44, 512);
 
-  const rightDust = ctxC.createLinearGradient(512, 0, 464, 0);
-  rightDust.addColorStop(0, 'rgba(182, 148, 106, 0.45)');
-  rightDust.addColorStop(1, 'rgba(182, 148, 106, 0)');
+  const rightDust = ctxC.createLinearGradient(512, 0, 468, 0);
+  rightDust.addColorStop(0, 'rgba(188, 142, 92, 0.42)');
+  rightDust.addColorStop(1, 'rgba(188, 142, 92, 0)');
   ctxC.fillStyle = rightDust;
-  ctxC.fillRect(464, 0, 48, 512);
+  ctxC.fillRect(468, 0, 44, 512);
 
-  ctxC.fillStyle = '#e8b63a';
-  ctxC.fillRect(22, 0, 10, 512);
-  ctxC.fillRect(480, 0, 10, 512);
+  // Solid high-contrast yellow curb shoulder lines
+  ctxC.fillStyle = '#f5c024';
+  ctxC.fillRect(16, 0, 12, 512);
+  ctxC.fillRect(484, 0, 12, 512);
 
-  ctxC.fillStyle = '#f2ede0';
+  // Crisp high-contrast dashed white lane dividers
+  ctxC.fillStyle = '#f8fafc';
   const laneDivX = [176, 336];
   for (const dx of laneDivX) {
-    for (let y = 16; y < 512; y += 96) {
-      ctxC.fillRect(dx - 5, y, 10, 52);
+    for (let y = 14; y < 512; y += 96) {
+      ctxC.fillRect(dx - 6, y, 12, 56);
     }
-  }
-
-  ctxC.fillStyle = 'rgba(20, 22, 26, 0.24)';
-  for (const cx of [100, 256, 412]) {
-    ctxC.fillRect(cx - 24, 0, 12, 512);
-    ctxC.fillRect(cx + 12, 0, 12, 512);
   }
 
   return {
@@ -86,79 +130,152 @@ export function createAsphaltRoadTextures(anisotropy: number): {
   };
 }
 
-/** Raised bazaar sidewalk stone pavers */
+/** Raised bazaar sidewalk with varied warm sandstone concrete pavers & subtle cracks */
 export function createSidewalkTexture(anisotropy: number): THREE.CanvasTexture {
   const [canvas, ctx] = makeCanvas(256, 256);
-  ctx.fillStyle = '#b9a68b';
+  ctx.fillStyle = '#7c6d5a';
   ctx.fillRect(0, 0, 256, 256);
 
   for (let y = 0; y < 256; y += 64) {
     for (let x = 0; x < 256; x += 64) {
-      const shade = 165 + Math.floor(Math.random() * 24);
-      ctx.fillStyle = `rgb(${shade + 12}, ${shade - 4}, ${shade - 26})`;
+      const shade = 152 + Math.floor(Math.random() * 28);
+      const warmShift = Math.floor(Math.random() * 14);
+      ctx.fillStyle = `rgb(${shade + 16 + warmShift}, ${shade - 2 + Math.floor(warmShift * 0.5)}, ${shade - 24})`;
       ctx.fillRect(x + 2, y + 2, 60, 60);
+
+      // Subtle grit inside each paver tile
+      for (let g = 0; g < 18; g++) {
+        ctx.fillStyle =
+          Math.random() > 0.5 ? 'rgba(255,244,224,0.09)' : 'rgba(42,30,20,0.11)';
+        ctx.fillRect(x + 4 + Math.random() * 54, y + 4 + Math.random() * 54, 3, 3);
+      }
+
+      // Occasional hairline sidewalk crack
+      if ((x + y) % 128 === 0) {
+        ctx.strokeStyle = 'rgba(48, 36, 24, 0.38)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x + 10, y + 12);
+        ctx.lineTo(x + 28, y + 34);
+        ctx.lineTo(x + 48, y + 44);
+        ctx.stroke();
+      }
     }
   }
   return finalizeTexture(canvas, anisotropy, true, 1, 3);
 }
 
-/** Indian computer-market multi-story building facade with painted plaster, windows & tech boards */
+/** Soft organic radial ground-contact shadow texture for runner, Boss, customers & obstacles */
+export function createSoftContactShadowTexture(): THREE.CanvasTexture {
+  const [canvas, ctx] = makeCanvas(128, 128);
+  ctx.clearRect(0, 0, 128, 128);
+  const grad = ctx.createRadialGradient(64, 64, 8, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(12, 8, 5, 0.72)');
+  grad.addColorStop(0.52, 'rgba(14, 10, 6, 0.42)');
+  grad.addColorStop(0.82, 'rgba(14, 10, 6, 0.14)');
+  grad.addColorStop(1, 'rgba(14, 10, 6, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Rich Indian computer-market building facade texture in cohesive terracotta, teal, cream & ochre palettes
+ * with weathered plaster, shaded recessed window bays, architectural ledges, and varied roller shutters.
+ */
 export function createBazaarFacadeTexture(
   anisotropy: number,
   wallHex: string,
   trimHex: string,
-  shopName: string
+  shutterHex: string,
+  shopName?: string
 ): THREE.CanvasTexture {
   const [canvas, ctx] = makeCanvas(256, 512);
   ctx.fillStyle = wallHex;
   ctx.fillRect(0, 0, 256, 512);
 
-  for (let i = 0; i < 650; i++) {
+  // Warm weathered plaster texture & subtle sun gradient
+  const sunGrad = ctx.createLinearGradient(0, 0, 0, 512);
+  sunGrad.addColorStop(0, 'rgba(255, 232, 185, 0.18)');
+  sunGrad.addColorStop(0.65, 'rgba(0, 0, 0, 0)');
+  sunGrad.addColorStop(1, 'rgba(28, 16, 10, 0.24)');
+  ctx.fillStyle = sunGrad;
+  ctx.fillRect(0, 0, 256, 512);
+
+  for (let i = 0; i < 850; i++) {
     ctx.fillStyle =
-      Math.random() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(30,20,10,0.07)';
+      Math.random() > 0.5 ? 'rgba(255,245,220,0.06)' : 'rgba(36,20,10,0.08)';
     ctx.fillRect(Math.random() * 256, Math.random() * 512, 6, 4);
   }
 
+  // Upper 2 stories with recessed shadowed windows & decorative Indian cornice moldings
   for (let floor = 0; floor < 2; floor++) {
-    const wy = 42 + floor * 126;
+    const wy = 44 + floor * 124;
     ctx.fillStyle = trimHex;
-    ctx.fillRect(0, wy - 18, 256, 10);
+    ctx.fillRect(0, wy - 20, 256, 10);
+    ctx.fillStyle = 'rgba(20, 12, 8, 0.28)';
+    ctx.fillRect(0, wy - 10, 256, 5);
 
     for (let col = 0; col < 3; col++) {
-      const wx = 22 + col * 78;
-      ctx.fillStyle = '#2d2420';
-      ctx.fillRect(wx, wy, 54, 72);
-      ctx.fillStyle = '#4f6d82';
-      ctx.fillRect(wx + 5, wy + 5, 44, 62);
-      ctx.fillStyle = 'rgba(255, 224, 150, 0.35)';
-      ctx.fillRect(wx + 8, wy + 8, 17, 26);
-      ctx.fillRect(wx + 29, wy + 8, 17, 26);
-      ctx.fillStyle = '#241d19';
-      ctx.fillRect(wx + 25, wy + 5, 4, 62);
-      ctx.fillRect(wx + 5, wy + 34, 44, 4);
+      const wx = 20 + col * 78;
+      // Deep shadow recess
+      ctx.fillStyle = '#231a15';
+      ctx.fillRect(wx, wy, 58, 74);
+      // Warm-tinted glass reflecting afternoon sky
+      const glassGrad = ctx.createLinearGradient(wx, wy, wx, wy + 70);
+      glassGrad.addColorStop(0, '#365672');
+      glassGrad.addColorStop(0.55, '#597a8c');
+      glassGrad.addColorStop(1, '#c89e6e');
+      ctx.fillStyle = glassGrad;
+      ctx.fillRect(wx + 6, wy + 6, 46, 62);
+
+      // Mullion grid
+      ctx.fillStyle = '#1e1612';
+      ctx.fillRect(wx + 27, wy + 6, 4, 62);
+      ctx.fillRect(wx + 6, wy + 35, 46, 4);
+      // Window sill
       ctx.fillStyle = trimHex;
-      ctx.fillRect(wx - 4, wy + 72, 62, 8);
+      ctx.fillRect(wx - 4, wy + 74, 66, 8);
     }
   }
 
+  // Mid-level architectural fascia band (optional clean muted shop sign, never harsh red LAPT!)
   ctx.fillStyle = trimHex;
-  ctx.fillRect(10, 294, 236, 58);
-  ctx.strokeStyle = '#fff5dc';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(14, 298, 228, 50);
+  ctx.fillRect(8, 294, 240, 56);
+  ctx.strokeStyle = 'rgba(255, 244, 214, 0.75)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(12, 298, 232, 48);
 
-  ctx.fillStyle = '#fff9ec';
-  ctx.font = 'bold 21px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(shopName, 128, 323);
-
-  ctx.fillStyle = '#474c54';
-  ctx.fillRect(18, 360, 220, 146);
-  for (let y = 368; y < 504; y += 12) {
-    ctx.fillStyle = y % 24 === 0 ? '#5c636e' : '#3a3f46';
-    ctx.fillRect(22, y, 212, 8);
+  if (shopName) {
+    ctx.fillStyle = '#fff7e4';
+    ctx.font = 'bold 19px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(shopName, 128, 322);
+  } else {
+    // Decorative architectural ribs instead of text for Title-flanking buildings
+    ctx.fillStyle = 'rgba(255, 240, 200, 0.22)';
+    for (let x = 22; x < 236; x += 26) {
+      ctx.fillRect(x, 306, 12, 32);
+    }
   }
+
+  // Ground-floor corrugated metal roller shutter with varied finish
+  ctx.fillStyle = '#1f2329';
+  ctx.fillRect(14, 358, 228, 150);
+  ctx.fillStyle = shutterHex;
+  ctx.fillRect(18, 362, 220, 144);
+  for (let y = 368; y < 504; y += 11) {
+    ctx.fillStyle = y % 22 === 0 ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.22)';
+    ctx.fillRect(20, y, 216, 4);
+  }
+  // Shutter lock handle bar
+  ctx.fillStyle = '#d4d4d8';
+  ctx.fillRect(96, 476, 64, 6);
 
   return finalizeTexture(canvas, anisotropy, true, 1, 1);
 }
@@ -174,7 +291,7 @@ export function createPCSolutionSignTextures(anisotropy: number): {
   const [cE, ctxE] = makeCanvas(512, 160);
   ctxE.fillStyle = '#f4f5ee';
   ctxE.fillRect(0, 0, 200, 160);
-  ctxE.fillStyle = '#3359b8';
+  ctxE.fillStyle = '#2d52b0';
   ctxE.fillRect(200, 0, 312, 160);
 
   ctxE.fillStyle = '#2c353d';
@@ -196,9 +313,9 @@ export function createPCSolutionSignTextures(anisotropy: number): {
 
   // 2. ASUS Mid Charcoal Board
   const [cA, ctxA] = makeCanvas(512, 140);
-  ctxA.fillStyle = '#2d3744';
+  ctxA.fillStyle = '#25303d';
   ctxA.fillRect(0, 0, 512, 140);
-  ctxA.fillStyle = '#3e4c5e';
+  ctxA.fillStyle = '#3c4b5e';
   ctxA.fillRect(0, 0, 512, 10);
 
   ctxA.fillStyle = '#f2f6fb';
@@ -214,9 +331,9 @@ export function createPCSolutionSignTextures(anisotropy: number): {
   // 3. Main "pc solution — COMPUTER SALES & SERVICE" Board
   const [cM, ctxM] = makeCanvas(512, 176);
   const bgGrad = ctxM.createLinearGradient(0, 0, 0, 176);
-  bgGrad.addColorStop(0, '#f3f1ec');
-  bgGrad.addColorStop(0.5, '#fcfbf8');
-  bgGrad.addColorStop(1, '#e6e2da');
+  bgGrad.addColorStop(0, '#f7f4ed');
+  bgGrad.addColorStop(0.5, '#fffdf9');
+  bgGrad.addColorStop(1, '#eae4d8');
   ctxM.fillStyle = bgGrad;
   ctxM.fillRect(0, 0, 512, 176);
 
@@ -229,12 +346,12 @@ export function createPCSolutionSignTextures(anisotropy: number): {
   ctxM.lineTo(340, 176);
   ctxM.stroke();
 
-  ctxM.fillStyle = '#e03939';
+  ctxM.fillStyle = '#d93535';
   ctxM.fillRect(0, 0, 512, 18);
 
-  ctxM.fillStyle = '#2c3036';
+  ctxM.fillStyle = '#252930';
   ctxM.fillRect(28, 36, 98, 72);
-  ctxM.fillStyle = '#374147';
+  ctxM.fillStyle = '#333d44';
   ctxM.fillRect(34, 42, 86, 60);
   ctxM.fillStyle = '#3c434a';
   ctxM.beginPath();
@@ -248,16 +365,16 @@ export function createPCSolutionSignTextures(anisotropy: number): {
   ctxM.lineWidth = 2;
   ctxM.stroke();
 
-  ctxM.fillStyle = '#62e03c';
+  ctxM.fillStyle = '#5ee036';
   ctxM.font = '900 54px sans-serif';
   ctxM.textAlign = 'center';
   ctxM.fillText('pc', 77, 88);
 
   ctxM.font = '900 76px sans-serif';
   ctxM.textAlign = 'left';
-  ctxM.fillStyle = '#6c424c';
+  ctxM.fillStyle = '#5c343e';
   ctxM.fillText('solution', 148, 112);
-  ctxM.fillStyle = '#d48697';
+  ctxM.fillStyle = '#cf788b';
   ctxM.fillText('solution', 144, 108);
 
   ctxM.strokeStyle = '#ff8a1e';
@@ -269,7 +386,7 @@ export function createPCSolutionSignTextures(anisotropy: number): {
     ctxM.stroke();
   }
 
-  ctxM.fillStyle = '#2a2e33';
+  ctxM.fillStyle = '#22262b';
   ctxM.font = 'bold 21px sans-serif';
   ctxM.textAlign = 'center';
   ctxM.fillText('COMPUTER SALES & SERVICE', 316, 152);
@@ -309,13 +426,11 @@ export function createFragilePrinterBoxTexture(anisotropy: number): THREE.Canvas
   ctx.fillStyle = '#c89b65';
   ctx.fillRect(0, 0, 256, 256);
 
-  // Subtle cardboard flute lines
   ctx.fillStyle = 'rgba(80, 48, 18, 0.14)';
   for (let y = 0; y < 256; y += 16) {
     ctx.fillRect(0, y, 256, 3);
   }
 
-  // Brand header
   ctx.fillStyle = '#1d4ed8';
   ctx.fillRect(14, 18, 228, 36);
   ctx.fillStyle = '#ffffff';
@@ -323,7 +438,6 @@ export function createFragilePrinterBoxTexture(anisotropy: number): THREE.Canvas
   ctx.textAlign = 'center';
   ctx.fillText('EPSON / CANON', 128, 43);
 
-  // Bold diagonal-style FRAGILE tape band
   ctx.fillStyle = '#dc2626';
   ctx.fillRect(0, 98, 256, 56);
   ctx.fillStyle = '#facc15';
@@ -398,7 +512,6 @@ export function createKhataBookTexture(anisotropy: number): THREE.CanvasTexture 
   ctx.lineWidth = 10;
   ctx.strokeRect(14, 14, 228, 228);
 
-  // Classic white cloth-tie ribbon down the middle
   ctx.fillStyle = '#f8fafc';
   ctx.fillRect(118, 0, 20, 256);
 
@@ -437,8 +550,8 @@ export function createCoinEmblemTexture(anisotropy: number): THREE.CanvasTexture
 }
 
 /**
- * Loads an uploaded user photo and renders a crisp, bright, high-recognition oval photo-cutout
- * texture for the slightly oversized front-facing 3D face medallion (runners & Boss).
+ * Loads an uploaded user photo and blends it with a soft feathered radial edge so the recognizable
+ * face integrates seamlessly onto the golden-lit sculpted 3D head mesh (zero pasted rectangle edge!).
  */
 export function loadPortraitCutoutTexture(
   profile: PortraitProfile,
@@ -472,14 +585,15 @@ export function loadPortraitCutoutTexture(
     ctx.fillRect(0, 0, 512, 512);
 
     ctx.save();
-    ctx.filter = 'contrast(1.06) saturate(1.07) brightness(1.09)';
+    ctx.filter = 'contrast(1.06) saturate(1.08) brightness(1.06)';
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 512, 512);
     ctx.restore();
 
-    // Very subtle outer rim blend so the entire real face stays sharp & unmistakable
-    const edgeGrad = ctx.createRadialGradient(256, 256, 224, 256, 256, 256);
-    edgeGrad.addColorStop(0, 'rgba(0,0,0,0)');
-    edgeGrad.addColorStop(0.88, 'rgba(0,0,0,0)');
+    // Subtle warm golden-hour facial color harmony + soft skin-tone feather around the outer edge
+    const edgeGrad = ctx.createRadialGradient(256, 256, 196, 256, 256, 256);
+    edgeGrad.addColorStop(0, 'rgba(255, 226, 178, 0.05)');
+    edgeGrad.addColorStop(0.78, 'rgba(0, 0, 0, 0)');
+    edgeGrad.addColorStop(0.94, `${skinHex}b8`);
     edgeGrad.addColorStop(1, skinHex);
     ctx.fillStyle = edgeGrad;
     ctx.fillRect(0, 0, 512, 512);

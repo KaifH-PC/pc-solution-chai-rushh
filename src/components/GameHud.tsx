@@ -1,6 +1,6 @@
-import React from 'react';
-import { Pause, Volume2, VolumeX, Zap } from 'lucide-react';
-import { ABILITIES, CHARACTERS, GamePhase, RunStats, SaveData } from '../game/types';
+import React, { useEffect, useState } from 'react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, Flame, Magnet, Pause, Shield, Volume2, VolumeX, Zap } from 'lucide-react';
+import { ABILITIES, CHARACTERS, GamePhase, PowerUpKind, RunStats, SaveData } from '../game/types';
 import { PortraitAvatar, RupeeCoinIcon, ShieldWardIcon, SteamingTeaCupIcon } from './GameIcons';
 
 interface GameHudProps {
@@ -10,7 +10,38 @@ interface GameHudProps {
   onPause: () => void;
   onToggleMute: () => void;
   onTriggerAbility: () => void;
+  onDismissHints: () => void;
 }
+
+const POWERUP_META: Record<
+  PowerUpKind,
+  { name: string; accent: string; bgClass: string; borderClass: string }
+> = {
+  chai_board: {
+    name: 'Chai-Board',
+    accent: '#34d399',
+    bgClass: 'bg-emerald-500 text-[#062114]',
+    borderClass: 'border-emerald-200',
+  },
+  coin_magnet: {
+    name: 'Magnet',
+    accent: '#f5c851',
+    bgClass: 'bg-amber-400 text-[#221506]',
+    borderClass: 'border-amber-100',
+  },
+  kadak_boost: {
+    name: 'Kadak Boost',
+    accent: '#fb923c',
+    bgClass: 'bg-orange-500 text-[#260f04]',
+    borderClass: 'border-orange-200',
+  },
+  extra_tea: {
+    name: 'Extra Tea',
+    accent: '#4ade80',
+    bgClass: 'bg-emerald-500 text-[#062114]',
+    borderClass: 'border-emerald-200',
+  },
+};
 
 export const GameHud: React.FC<GameHudProps> = ({
   phase,
@@ -19,7 +50,60 @@ export const GameHud: React.FC<GameHudProps> = ({
   onPause,
   onToggleMute,
   onTriggerAbility,
+  onDismissHints,
 }) => {
+  const [hintsVisible, setHintsVisible] = useState(!save.hasSeenControlsHint);
+
+  useEffect(() => {
+    if (save.hasSeenControlsHint) {
+      setHintsVisible(false);
+      return;
+    }
+    if (phase !== 'playing') return;
+
+    setHintsVisible(true);
+    let inputs = 0;
+
+    const dismiss = () => {
+      setHintsVisible(false);
+      onDismissHints();
+    };
+
+    const onInput = (e: Event) => {
+      if (e instanceof KeyboardEvent) {
+        if (
+          ![
+            'ArrowLeft',
+            'ArrowRight',
+            'ArrowUp',
+            'ArrowDown',
+            'KeyA',
+            'KeyD',
+            'KeyW',
+            'KeyS',
+            'Space',
+            'KeyE',
+          ].includes(e.code)
+        ) {
+          return;
+        }
+      }
+      inputs += 1;
+      if (inputs >= 3) {
+        dismiss();
+      }
+    };
+
+    const timer = window.setTimeout(dismiss, 7500);
+    window.addEventListener('keydown', onInput);
+    window.addEventListener('pointerdown', onInput, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('keydown', onInput);
+      window.removeEventListener('pointerdown', onInput);
+    };
+  }, [phase, save.hasSeenControlsHint, onDismissHints]);
+
   const runnerProfile =
     CHARACTERS.find((c) => c.id === save.selectedCharacter) ?? CHARACTERS[0];
   const ability =
@@ -28,8 +112,20 @@ export const GameHud: React.FC<GameHudProps> = ({
   const isReturnLeg = stats.leg === 'to_pc_solution';
   const chaiMoneyReady = stats.chaiMoneyReady;
   const isOverPar = stats.elapsedSec > stats.parTimeSec || stats.refillCount > 0;
-  const abilityReady = !ability.isPassive && stats.abilityCooldown <= 0 && stats.abilityActiveTimer <= 0;
+
+  const storedKind = stats.storedPowerUp;
+  const activeKind = stats.activePowerUpKind;
   const abilityActive = stats.abilityActiveTimer > 0;
+  const abilityReady =
+    Boolean(storedKind) ||
+    (!ability.isPassive && stats.abilityCooldown <= 0 && !abilityActive);
+
+  const renderPowerIcon = (kind: PowerUpKind | null) => {
+    if (kind === 'chai_board') return <Shield className="w-4 h-4 shrink-0" />;
+    if (kind === 'coin_magnet') return <Magnet className="w-4 h-4 shrink-0" />;
+    if (kind === 'kadak_boost') return <Flame className="w-4 h-4 shrink-0" />;
+    return <Zap className="w-4 h-4 shrink-0" />;
+  };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4">
@@ -103,7 +199,13 @@ export const GameHud: React.FC<GameHudProps> = ({
 
             {isReturnLeg ? (
               <div className="w-full flex items-center justify-between text-[11px] pt-0.5">
-                <span className={stats.customersPacified ? 'text-emerald-300 font-semibold' : 'text-amber-200/90 font-medium'}>
+                <span
+                  className={
+                    stats.customersPacified
+                      ? 'text-emerald-300 font-semibold'
+                      : 'text-amber-200/90 font-medium'
+                  }
+                >
                   {stats.customersPacified
                     ? 'VIP Tray · Customers Pacified!'
                     : 'Hot Chai Balance (3 hits = U-Turn)'}
@@ -120,7 +222,9 @@ export const GameHud: React.FC<GameHudProps> = ({
               </div>
             ) : (
               <div className="w-full flex items-center justify-between text-[11px] text-amber-100/75 pt-0.5">
-                <span>{stats.teaTasteLabel} ({stats.teaTasteStars}★)</span>
+                <span>
+                  {stats.teaTasteLabel} ({stats.teaTasteStars}★)
+                </span>
                 <span className={chaiMoneyReady ? 'text-emerald-300 font-bold' : ''}>
                   {stats.stumbleWarning
                     ? 'CUSTOMERS RIGHT BEHIND YOU!'
@@ -132,7 +236,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             )}
           </div>
 
-          {/* TOP-RIGHT: Live Coin Target Badge (12 / 15 Coins -> bright green!) + Tea Cups & Controls */}
+          {/* TOP-RIGHT: Live Coin Target + Tea Cups & Controls */}
           <div className="flex items-center gap-1.5 sm:gap-2">
             <div
               className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
@@ -188,7 +292,7 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
         </div>
 
-        {/* MOBILE COMPACT MISSION STRIP — docked neatly right beneath the top HUD bar */}
+        {/* MOBILE COMPACT MISSION STRIP */}
         <div className="md:hidden w-full max-w-sm mx-auto mt-1.5 rounded-lg bg-[#18100b]/86 border border-amber-300/25 px-3 py-1.5">
           <div className="flex items-center justify-between text-[11px] font-semibold mb-1">
             <span className={isReturnLeg ? 'text-emerald-300' : 'text-amber-300'}>
@@ -205,7 +309,11 @@ export const GameHud: React.FC<GameHudProps> = ({
                 ))}
               </div>
             ) : (
-              <span className={isOverPar ? 'font-mono-num text-rose-400' : 'font-mono-num text-emerald-300'}>
+              <span
+                className={
+                  isOverPar ? 'font-mono-num text-rose-400' : 'font-mono-num text-emerald-300'
+                }
+              >
                 {stats.elapsedSec.toFixed(0)}s / {stats.parTimeSec}s
               </span>
             )}
@@ -252,7 +360,52 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {/* BOTTOM ROW: Customer Proximity Warning + Thumb-Ergonomic Ability Button */}
+      {/* FIRST-RUN ANIMATED VISUAL CONTROL HINTS (non-intrusive, remembered in localStorage) */}
+      {hintsVisible && phase === 'playing' && (
+        <div className="hint-float fixed bottom-20 left-1/2 -translate-x-1/2 pointer-events-none z-20 max-w-[94vw]">
+          <div className="flex items-center gap-2 sm:gap-3 rounded-xl bg-[#140d09]/88 border border-amber-400/40 px-3 py-2 text-[11px] sm:text-xs font-bold text-amber-100 shadow-xl">
+            <span className="flex items-center gap-1 whitespace-nowrap">
+              <ArrowLeftRight className="w-3.5 h-3.5 text-amber-300" />
+              Dodge
+            </span>
+            <span className="text-amber-300/35">·</span>
+            <span className="flex items-center gap-1 whitespace-nowrap">
+              <ArrowUp className="w-3.5 h-3.5 text-emerald-300" />
+              Jump
+            </span>
+            <span className="text-amber-300/35">·</span>
+            <span className="flex items-center gap-1 whitespace-nowrap">
+              <ArrowDown className="w-3.5 h-3.5 text-sky-300" />
+              Roll
+            </span>
+            <span className="text-amber-300/35">·</span>
+            <span className="flex items-center gap-1 whitespace-nowrap">
+              <Zap className="w-3.5 h-3.5 text-orange-300" />
+              Tap Power-Up
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* BRIEF POWER-UP PICKUP LABEL TOAST */}
+      {stats.lastPowerUpLabel && phase === 'playing' && (
+        <div
+          key={stats.lastPowerUpLabel}
+          className="power-toast-pop fixed bottom-20 left-1/2 pointer-events-none z-20 max-w-[90vw]"
+        >
+          <div
+            className="rounded-xl bg-[#140d09]/92 border-2 px-3.5 py-1.5 text-xs sm:text-sm font-display font-extrabold shadow-xl whitespace-nowrap"
+            style={{
+              borderColor: stats.lastPowerUpAccent ?? '#34d399',
+              color: stats.lastPowerUpAccent ?? '#34d399',
+            }}
+          >
+            {stats.lastPowerUpLabel}
+          </div>
+        </div>
+      )}
+
+      {/* BOTTOM ROW: Status Warnings + Thumb-Ergonomic Stored Power-Up / Ability Button */}
       <div className="flex items-end justify-between w-full max-w-6xl mx-auto pb-1">
         <div className="flex flex-col gap-1">
           {stats.stumbleWarning && phase === 'playing' && (
@@ -267,28 +420,38 @@ export const GameHud: React.FC<GameHudProps> = ({
           )}
         </div>
 
-        {phase === 'playing' && !ability.isPassive && (
+        {phase === 'playing' && (Boolean(storedKind) || !ability.isPassive) && (
           <button
             type="button"
             onClick={onTriggerAbility}
             disabled={!abilityReady}
-            className={`pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-xl font-bold text-sm border transition-all cursor-pointer ${
-              abilityActive
-                ? 'bg-emerald-500 text-[#072115] border-emerald-200'
-                : abilityReady
-                  ? 'bg-[#21150e]/92 hover:bg-[#322116] text-amber-100 border-amber-400/70 active:scale-95'
-                  : 'bg-[#17100c]/80 text-amber-100/45 border-white/15 cursor-not-allowed'
+            className={`pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-xl font-bold text-sm border-2 transition-all cursor-pointer shadow-xl ${
+              storedKind
+                ? `${POWERUP_META[storedKind].bgClass} ${POWERUP_META[storedKind].borderClass} active:scale-95`
+                : abilityActive
+                  ? 'bg-emerald-500 text-[#072115] border-emerald-200'
+                  : abilityReady
+                    ? 'bg-[#21150e]/92 hover:bg-[#322116] text-amber-100 border-amber-400/70 active:scale-95'
+                    : 'bg-[#17100c]/80 text-amber-100/45 border-white/15 cursor-not-allowed'
             }`}
           >
-            <Zap className="w-4 h-4 shrink-0" />
+            {renderPowerIcon(storedKind ?? activeKind)}
             <div className="text-left leading-tight">
-              <div className="whitespace-nowrap">{ability.name.split(' ')[0]}</div>
-              <div className="font-mono-num text-[10px] opacity-85">
-                {abilityActive
-                  ? `${stats.abilityActiveTimer.toFixed(1)}s`
-                  : abilityReady
-                    ? 'Ready · [E] / 2x'
-                    : `${Math.ceil(stats.abilityCooldown)}s`}
+              <div className="whitespace-nowrap">
+                {storedKind
+                  ? POWERUP_META[storedKind].name
+                  : activeKind
+                    ? POWERUP_META[activeKind].name
+                    : ability.name.split(' ')[0]}
+              </div>
+              <div className="font-mono-num text-[10px] opacity-90">
+                {storedKind
+                  ? 'Tap / [E] · Stored'
+                  : abilityActive
+                    ? `${stats.abilityActiveTimer.toFixed(1)}s`
+                    : abilityReady
+                      ? 'Ready · [E] / 2x'
+                      : `${Math.ceil(stats.abilityCooldown)}s`}
               </div>
             </div>
           </button>

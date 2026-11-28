@@ -151,13 +151,13 @@ export const StatusModal: React.FC<StatusModalProps> = ({
   onOpenShop,
   onReturnTitle,
 }) => {
-  // 0.6s anti-accidental-tap lock so frantic lane-swipes don't skip the funny Boss Verdict
+  // Brief 0.35s anti-double-tap guard so tapping Skip on the ending video never accidentally dismisses the card
   const [readyToTap, setReadyToTap] = useState(true);
 
   useEffect(() => {
     if (phase === 'stageclear' || phase === 'caught') {
       setReadyToTap(false);
-      const timer = window.setTimeout(() => setReadyToTap(true), 600);
+      const timer = window.setTimeout(() => setReadyToTap(true), 350);
       return () => window.clearTimeout(timer);
     }
     setReadyToTap(true);
@@ -219,9 +219,9 @@ export const StatusModal: React.FC<StatusModalProps> = ({
   const coinsEarned = isCaught ? stats.coinsCollected : stats.stageBonusCoins;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-end items-center p-3 sm:p-5">
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-3 sm:p-5">
       <div
-        className={`pointer-events-auto w-full max-w-xl rounded-2xl bg-[#18100b]/95 border ${view.borderTone} shadow-2xl p-4 sm:p-5 text-amber-50`}
+        className={`w-full max-w-xl rounded-2xl bg-[#18100b]/96 border ${view.borderTone} shadow-2xl p-4 sm:p-5 text-amber-50`}
       >
         {/* Top Row: Boss Photo + Reaction Headline + Authentic PC Solution Photo */}
         <div className="flex items-start justify-between gap-3">
@@ -275,7 +275,7 @@ export const StatusModal: React.FC<StatusModalProps> = ({
           </div>
         </div>
 
-        {/* 4 Clean Tabular Stats (Zero Pills) */}
+        {/* 4 Clean Tabular Stats */}
         <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-center border-y border-white/10 py-2.5">
           <div>
             <div className="text-[11px] text-amber-100/65">Time vs. Par</div>
@@ -303,7 +303,7 @@ export const StatusModal: React.FC<StatusModalProps> = ({
           </div>
         </div>
 
-        {/* Primary CTA + Secondary Actions (0.6s Anti-Accidental-Tap Lock) */}
+        {/* Primary CTA + Secondary Actions */}
         <div className="mt-3.5 flex flex-wrap items-center gap-2">
           <button
             type="button"

@@ -8,6 +8,7 @@ import {
   GamePhase,
   ObstacleKind,
   PlayerMood,
+  PowerUpKind,
   RunLeg,
   RunStats,
   SaveData,
@@ -36,6 +37,7 @@ import {
   createLaptopRepairBannerTexture,
   createPCSolutionSignTextures,
   createSidewalkTexture,
+  createSoftContactShadowTexture,
   createTeaShopSignTexture,
   loadPortraitCutoutTexture,
 } from './textures';
@@ -55,13 +57,17 @@ import {
 } from './characterMesh';
 import {
   BazaarTexturePack,
+  createAsphaltShaderMaterial,
   createCoinMesh,
+  createGoldenSkyDome,
   createObstacleMesh,
   createPCSolutionLandmark,
+  createPowerUpMesh,
   createSteamingTeaCupMesh,
   createStreetSegment,
   createTeaShopLandmark,
   SEGMENT_LENGTH,
+  updateSkyDomeTheme,
 } from './worldBuilder';
 import { GameAudio } from './audio';
 
@@ -78,7 +84,8 @@ interface ActiveObstacle {
 
 interface ActivePickup {
   mesh: THREE.Object3D;
-  type: 'coin' | 'teacup';
+  type: 'coin' | 'teacup' | 'powerup';
+  powerUpKind?: PowerUpKind;
   lane: number;
   baseY: number;
   collected: boolean;
@@ -142,11 +149,13 @@ export class TempleRunEngine {
   private camera: THREE.PerspectiveCamera;
   private envRT: THREE.WebGLRenderTarget | null = null;
 
+  private skyDome: THREE.Mesh;
   private sunLight: THREE.DirectionalLight;
   private hemiLight: THREE.HemisphereLight;
   private rimLight: THREE.DirectionalLight;
 
   private textures: BazaarTexturePack;
+  private asphaltMaterial: THREE.MeshStandardMaterial;
   private faceTextures: Map<string, THREE.CanvasTexture> = new Map();
   private bossFaceTexture: THREE.CanvasTexture;
 
@@ -193,16 +202,21 @@ export class TempleRunEngine {
   private maxShields = 1;
   private secondWindAvailable = false;
 
-  // Needy Customer chase proximity (0 = far behind, 1 = right on runner's heels!)
+  // Needy Customer chase proximity
   private customerProximity = 0.25;
   private stumbleWarningTimer = 0;
   private invulnerableTimer = 0;
 
-  // Ability timers
+  // Ability & Collectible 3D Lane Power-Up state
   private abilityCooldown = 0;
   private abilityMaxCooldown = 15;
   private abilityActiveTimer = 0;
   private abilityActiveMax = 6;
+  private storedPowerUp: PowerUpKind | null = null;
+  private activePowerUpKind: PowerUpKind | null = null;
+  private lastPowerUpLabel: string | null = null;
+  private lastPowerUpAccent: string | null = null;
+  private powerUpToastTimer = 0;
 
   // Cutscene timers
   private introTimer = 0;
@@ -216,6 +230,7 @@ export class TempleRunEngine {
   private velocityY = 0;
   private isSliding = false;
   private slideTimer = 0;
+  private fastDropRollTimer = 0;
   private laneLean = 0;
   private runAnimTime = 0;
   private screenShake = 0;
@@ -238,9 +253,9 @@ export class TempleRunEngine {
   private calloutTimer = 0;
 
   // Camera state
-  private camPos = new THREE.Vector3(0, 2.3, 4.9);
-  private camLook = new THREE.Vector3(0, 1.5, -2);
-  private currentFov = 58;
+  private camPos = new THREE.Vector3(0, 2.55, 6.45);
+  private camLook = new THREE.Vector3(0.05, 2.55, -2.5);
+  private currentFov = 56;
 
   // Loop & input state
   private disposed = false;
@@ -264,7 +279,7 @@ export class TempleRunEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.setPixelRatio(
       this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
     );
@@ -282,8 +297,13 @@ export class TempleRunEngine {
 
     this.scene = new THREE.Scene();
     const firstPhase = getStreetPhase(1);
-    this.scene.background = new THREE.Color(firstPhase.skyTop);
+    this.scene.background = new THREE.Color(firstPhase.fogColor);
     this.scene.fog = new THREE.FogExp2(firstPhase.fogColor, firstPhase.fogDensity);
+
+    // Rich golden-hour procedural sky dome
+    this.skyDome = createGoldenSkyDome();
+    updateSkyDomeTheme(this.skyDome, firstPhase.skyTop, firstPhase.fogColor);
+    this.scene.add(this.skyDome);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
@@ -291,8 +311,8 @@ export class TempleRunEngine {
     pmrem.dispose();
 
     const initAspect = width / Math.max(1, height);
-    this.camera = new THREE.PerspectiveCamera(58, initAspect, 0.1, 165);
-    this.currentFov = this.getResponsiveFov(56, 82);
+    this.camera = new THREE.PerspectiveCamera(56, initAspect, 0.1, 175);
+    this.currentFov = this.getResponsiveFov(56, 80);
     this.camera.fov = this.currentFov;
     this.camera.updateProjectionMatrix();
     const initTitleCam = this.computeTitleCameraTarget(0);
@@ -301,44 +321,60 @@ export class TempleRunEngine {
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
 
-    this.hemiLight = new THREE.HemisphereLight(firstPhase.hemiSky, firstPhase.hemiGround, 0.78);
+    // Warm golden-hour directional sun + rich sky/ground hemisphere bounce + rim highlight
+    this.hemiLight = new THREE.HemisphereLight(firstPhase.hemiSky, firstPhase.hemiGround, 0.92);
     this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(firstPhase.sunColor, firstPhase.sunIntensity);
-    this.sunLight.position.set(14, 24, 16);
+    this.sunLight.position.set(16, 22, 18);
+    this.scene.add(this.sunLight.target);
     if (!this.isSoftwareGl) {
       this.sunLight.castShadow = true;
       this.sunLight.shadow.mapSize.set(1024, 1024);
       this.sunLight.shadow.camera.near = 2;
-      this.sunLight.shadow.camera.far = 75;
+      this.sunLight.shadow.camera.far = 85;
       this.sunLight.shadow.camera.left = -22;
       this.sunLight.shadow.camera.right = 22;
-      this.sunLight.shadow.camera.top = 22;
-      this.sunLight.shadow.camera.bottom = -22;
-      this.sunLight.shadow.bias = -0.0005;
-      this.sunLight.shadow.normalBias = 0.02;
+      this.sunLight.shadow.camera.top = 24;
+      this.sunLight.shadow.camera.bottom = -20;
+      this.sunLight.shadow.bias = -0.0004;
+      this.sunLight.shadow.normalBias = 0.025;
+      this.sunLight.shadow.radius = 3;
     }
     this.scene.add(this.sunLight);
 
-    this.rimLight = new THREE.DirectionalLight(0xffcf88, 0.65);
-    this.rimLight.position.set(-10, 9, -14);
+    this.rimLight = new THREE.DirectionalLight(0xffb86c, 0.72);
+    this.rimLight.position.set(-12, 10, -16);
     this.scene.add(this.rimLight);
 
     const aniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const roadTex = createAsphaltRoadTextures(aniso);
+    this.asphaltMaterial = createAsphaltShaderMaterial(roadTex.map, roadTex.bumpMap);
+
+    // Cohesive Terracotta, Teal, Cream, and Ochre Indian market palettes (ZERO harsh red 'LAPT' signage!)
     const facades = [
-      createBazaarFacadeTexture(aniso, '#e5b27a', '#b93822', 'GUPTA LAPTOPS'),
-      createBazaarFacadeTexture(aniso, '#d98a5b', '#1b6d63', 'SHREE PRINTERS'),
-      createBazaarFacadeTexture(aniso, '#e8d39e', '#992544', 'METRO CABLES'),
-      createBazaarFacadeTexture(aniso, '#8fb8b5', '#c95c1a', 'RAM & SSD MART'),
-      createBazaarFacadeTexture(aniso, '#d4948a', '#244b8a', 'TONER REFILLS'),
-      createBazaarFacadeTexture(aniso, '#dfc286', '#216e3e', 'SHARMA XEROX'),
+      createBazaarFacadeTexture(aniso, '#c96a4b', '#87432a', '#246669', 'SHREE PRINTERS'),
+      createBazaarFacadeTexture(aniso, '#2f7e82', '#1d4f52', '#c88c32', 'METRO CABLES'),
+      createBazaarFacadeTexture(aniso, '#ebd8b7', '#9e6b3b', '#335d6e', 'RAM & SSD MART'),
+      createBazaarFacadeTexture(aniso, '#d49b3d', '#8c5a18', '#2a5f63', 'TONER REFILLS'),
+      createBazaarFacadeTexture(aniso, '#b96d54', '#703828', '#3c6970', 'SHARMA XEROX'),
+      createBazaarFacadeTexture(aniso, '#e2cca3', '#2d686c', '#b45c3c', 'BHARAT TECH'),
     ];
+    // Text-free golden-lit architectural facades flanking PC Solution on the Title screen
+    const titleFacades = [
+      createBazaarFacadeTexture(aniso, '#c96a4b', '#7d3d28', '#266669'),
+      createBazaarFacadeTexture(aniso, '#2f7e82', '#1d4d50', '#c99135'),
+      createBazaarFacadeTexture(aniso, '#ebd8b7', '#9c6838', '#2f6c70'),
+      createBazaarFacadeTexture(aniso, '#d49b3d', '#8a591a', '#9c4c34'),
+    ];
+
     this.textures = {
       roadMap: roadTex.map,
       roadBump: roadTex.bumpMap,
       sidewalkMap: createSidewalkTexture(aniso),
+      contactShadowMap: createSoftContactShadowTexture(),
       facades,
+      titleFacades,
       pcSolution: createPCSolutionSignTextures(aniso),
       fragileBoxMap: createFragilePrinterBoxTexture(aniso),
       repairBannerMap: createLaptopRepairBannerTexture(aniso),
@@ -351,6 +387,7 @@ export class TempleRunEngine {
       const tex = loadPortraitCutoutTexture(profile, aniso, (readyTex) => {
         if (this.save.selectedCharacter === profile.id && this.runner) {
           this.runner.faceMaterial.map = readyTex;
+          this.runner.faceMaterial.emissiveMap = readyTex;
           this.runner.faceMaterial.needsUpdate = true;
         }
       });
@@ -360,6 +397,7 @@ export class TempleRunEngine {
     this.bossFaceTexture = loadPortraitCutoutTexture(BOSS_PROFILE, aniso, (readyTex) => {
       if (this.bossRig) {
         this.bossRig.faceMaterial.map = readyTex;
+        this.bossRig.faceMaterial.emissiveMap = readyTex;
         this.bossRig.faceMaterial.needsUpdate = true;
       }
     });
@@ -367,17 +405,17 @@ export class TempleRunEngine {
     this.worldGroup = new THREE.Group();
     this.scene.add(this.worldGroup);
 
-    this.pcSolution = createPCSolutionLandmark(this.textures);
+    this.pcSolution = createPCSolutionLandmark(this.textures, this.asphaltMaterial);
     this.scene.add(this.pcSolution.group);
 
     this.teaShop = createTeaShopLandmark(this.textures.teaShopSign, this.textures.khataBookMap);
     this.teaShop.group.visible = false;
     this.scene.add(this.teaShop.group);
 
-    this.bossRig = createBossRig(this.bossFaceTexture);
+    this.bossRig = createBossRig(this.bossFaceTexture, this.textures.contactShadowMap);
     this.scene.add(this.bossRig.root);
 
-    this.customerPack = createNeedyCustomerPack();
+    this.customerPack = createNeedyCustomerPack(this.textures.contactShadowMap);
     this.scene.add(this.customerPack.root);
 
     this.flyingCup = createSteamingTeaCupMesh();
@@ -443,7 +481,7 @@ export class TempleRunEngine {
       CHARACTERS.find((c) => c.id === this.save.selectedCharacter) ?? CHARACTERS[0];
     const skin = SKINS.find((s) => s.id === this.save.equippedSkin) ?? SKINS[0];
     const faceTex = this.faceTextures.get(profile.id)!;
-    this.runner = createRunnerRig(profile, skin, faceTex);
+    this.runner = createRunnerRig(profile, skin, faceTex, this.textures.contactShadowMap);
     this.runner.root.position.copy(prevPos);
     this.runner.root.rotation.y = prevRotY;
     this.scene.add(this.runner.root);
@@ -466,7 +504,7 @@ export class TempleRunEngine {
 
   private spawnNextSegment(zPos: number): void {
     const index = this.nextSegmentIndex++;
-    const segGroup = createStreetSegment(index, this.textures);
+    const segGroup = createStreetSegment(index, this.textures, this.asphaltMaterial);
     segGroup.position.z = zPos;
 
     const pattern = generateSegmentPattern(index, this.streetPhase);
@@ -490,15 +528,20 @@ export class TempleRunEngine {
     }
 
     for (const pSpec of pattern.pickups) {
-      const mesh =
-        pSpec.type === 'teacup'
-          ? createSteamingTeaCupMesh()
-          : createCoinMesh(this.textures.coinMap);
+      let mesh: THREE.Object3D;
+      if (pSpec.type === 'powerup' && pSpec.powerUpKind) {
+        mesh = createPowerUpMesh(pSpec.powerUpKind);
+      } else if (pSpec.type === 'teacup') {
+        mesh = createSteamingTeaCupMesh();
+      } else {
+        mesh = createCoinMesh(this.textures.coinMap);
+      }
       mesh.position.set(LANE_X[pSpec.lane], pSpec.y, pSpec.zOffset);
       segGroup.add(mesh);
       pickups.push({
         mesh,
         type: pSpec.type,
+        powerUpKind: pSpec.powerUpKind,
         lane: pSpec.lane,
         baseY: pSpec.y,
         collected: false,
@@ -518,11 +561,12 @@ export class TempleRunEngine {
     this.teaShop.group.visible = false;
     this.flyingCup.visible = false;
 
-    this.runner.root.position.set(-0.35, 0, 0.35);
-    this.runner.root.rotation.y = 0;
+    // Grounded 3D Runner & Boss standing cleanly on dark golden-lit asphalt in front of PC Solution
+    this.runner.root.position.set(-1.22, 0, -0.45);
+    this.runner.root.rotation.y = 0.16;
 
     this.bossRig.root.visible = true;
-    this.bossRig.root.position.set(1.65, 0, -1.2);
+    this.bossRig.root.position.set(1.26, 0, -0.62);
     this.bossRig.root.rotation.y = -0.22;
 
     this.customerPack.root.visible = false;
@@ -530,7 +574,8 @@ export class TempleRunEngine {
 
   private applyStreetPhaseLighting(phaseNum: number): void {
     const theme = getStreetPhase(phaseNum);
-    this.scene.background = new THREE.Color(theme.skyTop);
+    this.scene.background = new THREE.Color(theme.fogColor);
+    updateSkyDomeTheme(this.skyDome, theme.skyTop, theme.fogColor);
     (this.scene.fog as THREE.FogExp2).color.setHex(theme.fogColor);
     (this.scene.fog as THREE.FogExp2).density = theme.fogDensity;
     this.sunLight.color.setHex(theme.sunColor);
@@ -553,6 +598,15 @@ export class TempleRunEngine {
 
   public setMuted(muted: boolean): void {
     this.audio.setMuted(muted);
+  }
+
+  /** Pauses/resumes Web Audio & speechSynthesis cleanly when MP4 cutscenes play */
+  public setExternalVideoPlaying(active: boolean): void {
+    this.audio.setExternalVideoPlaying(active);
+  }
+
+  public prepareAudioUnlock(): void {
+    this.audio.unlock();
   }
 
   public startRun(phaseOverride?: number, skipIntro = false): void {
@@ -591,6 +645,11 @@ export class TempleRunEngine {
     this.abilityMaxCooldown = abilityDef.cooldownSec;
     this.abilityActiveTimer = 0;
     this.abilityActiveMax = abilityDef.durationSec;
+    this.storedPowerUp = null;
+    this.activePowerUpKind = null;
+    this.lastPowerUpLabel = null;
+    this.lastPowerUpAccent = null;
+    this.powerUpToastTimer = 0;
 
     this.customerProximity = 0.34;
     this.stumbleWarningTimer = 0;
@@ -601,6 +660,7 @@ export class TempleRunEngine {
     this.velocityY = 0;
     this.isSliding = false;
     this.slideTimer = 0;
+    this.fastDropRollTimer = 0;
     this.laneLean = 0;
     this.screenShake = 0;
     this.coinCombo = 0;
@@ -629,7 +689,7 @@ export class TempleRunEngine {
     this.introTimer = 1.25;
     this.setPhase('intro');
     this.showCallout('CHAI TIME! RUN!!', '#fbbf24');
-    this.audio.playNeedyCustomerBurst(0.75, false);
+    this.audio.speakLine('Jaldi chai le aa!', 'boss', true);
     this.emitHud();
   }
 
@@ -688,7 +748,6 @@ export class TempleRunEngine {
     } else if (result.tier === 'vip_tray') {
       this.audio.playPurchase();
       this.audio.playCupClink();
-      this.audio.playVoiceChatter(250, 4);
       this.spawnBurst(0, 1.5, -1.2, 0x34d399, 26);
     } else if (result.tier === 'boss_and_me') {
       this.audio.playPurchase();
@@ -697,7 +756,7 @@ export class TempleRunEngine {
       this.spawnBurst(0, 1.5, -1.2, 0xfacc15, 18);
     } else {
       this.audio.playPurchase();
-      this.audio.playNeedyCustomerBurst(0.85, false);
+      this.audio.playComicAlert(false);
     }
 
     // Launch Leg 2: Return Sprint back to PC Solution!
@@ -713,6 +772,7 @@ export class TempleRunEngine {
     this.playerY = 0;
     this.velocityY = 0;
     this.isSliding = false;
+    this.fastDropRollTimer = 0;
 
     this.teaShop.group.visible = false;
     this.pcSolution.group.visible = false;
@@ -732,6 +792,7 @@ export class TempleRunEngine {
         "Customers: 'Arre bhaiya, kadak chai hai! Thank you!'"
       );
       this.showCallout('NO CHASE — CALM FOLLOWERS!', '#34d399');
+      this.audio.speakLine('Arre bhaiya, kadak chai hai!', 'happy_customer', true);
     } else if (result.tier === 'boss_and_me') {
       this.showBanner(
         '2 CUPS! BOSS + ME MORALE BOOST!',
@@ -750,16 +811,13 @@ export class TempleRunEngine {
         'Hold the sole cup steady — 3 hits = dramatic U-Turn!'
       );
       this.showCallout('THEY SPOTTED YOU!!', '#fb923c');
+      this.audio.speakLine('Arre ruk bhai!', 'customer_urgent', true);
     }
 
     this.emitHud();
     return true;
   }
 
-  /**
-   * Secondary Empty-Pockets option: Quick extra coin-harvest loop back to Sharma Chai Stall
-   * so players who arrived under 15 coins can still earn enough for clean Boss Praise!
-   */
   public startCoinDashLoop(): void {
     this.audio.unlock();
     if (this.phase !== 'teashop') return;
@@ -767,7 +825,7 @@ export class TempleRunEngine {
     this.inCoinDashLoop = true;
     this.leg = 'to_teashop';
     this.legDistance = 0;
-    this.customLegTarget = 240; // Punchy extra coin-harvest loop scaled for longer legs!
+    this.customLegTarget = 240;
     this.stumbleWarningTimer = 0;
     this.invulnerableTimer = 1.1;
     this.customerProximity = 0.34;
@@ -776,6 +834,7 @@ export class TempleRunEngine {
     this.playerY = 0;
     this.velocityY = 0;
     this.isSliding = false;
+    this.fastDropRollTimer = 0;
 
     this.teaShop.group.visible = false;
     this.pcSolution.group.visible = false;
@@ -795,15 +854,16 @@ export class TempleRunEngine {
 
   public startNextPhase(): void {
     this.streetPhase += 1;
-    this.startRun(this.streetPhase, false);
+    this.startRun(this.streetPhase, true);
   }
 
   public retryCurrentPhase(): void {
-    this.startRun(this.streetPhase, false);
+    this.startRun(this.streetPhase, true);
   }
 
   public togglePause(): void {
     if (this.phase === 'playing') {
+      this.audio.stopAllGameplayAudio();
       this.setPhase('paused');
     } else if (this.phase === 'paused') {
       this.setPhase('playing');
@@ -813,6 +873,7 @@ export class TempleRunEngine {
   }
 
   public returnToTitle(): void {
+    this.audio.stopAllGameplayAudio();
     this.streetPhase = 1;
     this.applyStreetPhaseLighting(1);
     this.resetWorldSegments();
@@ -821,13 +882,48 @@ export class TempleRunEngine {
     this.emitHud();
   }
 
+  /**
+   * Activates a stored lane power-up first (tap-to-use without consuming Shop cooldown),
+   * or falls back to the equipped Outfitter Shop active ability.
+   */
   public triggerAbility(): void {
     if (this.phase !== 'playing') return;
+
+    // 1. Prioritize stored 3D lane Power-Up!
+    if (this.storedPowerUp) {
+      const kind = this.storedPowerUp;
+      this.storedPowerUp = null;
+      this.activePowerUpKind = kind;
+      this.audio.unlock();
+      this.audio.playPowerUpActivate();
+
+      if (kind === 'chai_board') {
+        this.abilityActiveTimer = 6.2;
+        this.abilityActiveMax = 6.2;
+        this.spawnBurst(this.playerX, this.playerY + 1.1, 0, 0x34d399, 18);
+        this.showCallout('CHAI-BOARD SHIELD!', '#34d399');
+      } else if (kind === 'coin_magnet') {
+        this.abilityActiveTimer = 8.0;
+        this.abilityActiveMax = 8.0;
+        this.spawnBurst(this.playerX, this.playerY + 1.1, 0, 0xf5c851, 18);
+        this.showCallout('COIN MAGNET ACTIVE!', '#f5c851');
+      } else if (kind === 'kadak_boost') {
+        this.abilityActiveTimer = 5.2;
+        this.abilityActiveMax = 5.2;
+        this.spawnBurst(this.playerX, this.playerY + 1.1, 0, 0xfb923c, 20);
+        this.showCallout('KADAK SPEED BOOST!', '#fb923c');
+      }
+      this.emitHud();
+      return;
+    }
+
+    // 2. Otherwise trigger equipped Shop ability
     const def = ABILITIES.find((a) => a.id === this.save.equippedAbility);
     if (!def || def.isPassive) return;
     if (this.abilityCooldown > 0 || this.abilityActiveTimer > 0) return;
 
     this.audio.unlock();
+    this.activePowerUpKind = null;
     this.abilityActiveTimer = def.durationSec;
     this.abilityActiveMax = def.durationSec;
     this.abilityCooldown = def.cooldownSec;
@@ -861,9 +957,15 @@ export class TempleRunEngine {
     this.calloutTimer = 1.6;
   }
 
+  private showPowerUpToast(label: string, accent: string): void {
+    this.lastPowerUpLabel = label;
+    this.lastPowerUpAccent = accent;
+    this.powerUpToastTimer = 1.85;
+  }
+
   /**
-   * Triggers authentic Indian computer-market Hinglish comic speech callouts
-   * + matching procedural Web Audio SFX & vocal-formant chatter!
+   * Triggers authentic Indian computer-market Hinglish spoken voices + crisp SFX
+   * (with strict 4–6s speech cooldown inside GameAudio so lines never overlap or spam).
    */
   private triggerObstacleComedy(kind: ObstacleKind, isHit: boolean): void {
     if (!isHit && this.obstacleCalloutCooldown > 0) return;
@@ -876,7 +978,8 @@ export class TempleRunEngine {
             ? 'Bhaiya, Windows 7 dal do!'
             : 'Printer offline aa raha hai!';
         this.showCallout(line, isHit ? '#ef4444' : '#38bdf8');
-        this.audio.playVoiceChatter(245, 4);
+        this.audio.playComicAlert(true);
+        this.audio.speakLine(line, 'customer_whiny', isHit);
         break;
       }
       case 'cat6_cables':
@@ -884,31 +987,32 @@ export class TempleRunEngine {
       case 'fiber_loops': {
         this.showCallout('Arre wire mat kaatna!', isHit ? '#f97316' : '#38bdf8');
         this.audio.playElectricZap();
-        this.audio.playVoiceChatter(215, 3);
+        this.audio.speakLine('Arre wire mat kaatna!', 'shopkeeper', false);
         break;
       }
       case 'printer_boxes':
       case 'monitor_carriers': {
         this.showCallout('Dekh ke bhai, display toot jayega!', isHit ? '#f97316' : '#fbbf24');
-        this.audio.playVoiceChatter(200, 4);
+        this.audio.playComicAlert(false);
+        this.audio.speakLine('Dekh ke bhai!', 'shopkeeper', false);
         break;
       }
       case 'repair_banner': {
         this.showCallout('Arre seedhi sambhal ke bhai!', isHit ? '#f97316' : '#fbbf24');
-        this.audio.playVoiceChatter(220, 3);
+        this.audio.playComicAlert(false);
+        this.audio.speakLine('Arre ruk bhai!', 'shopkeeper', false);
         break;
       }
       case 'rickshaw':
       case 'cpu_scooter': {
         this.showCallout('Peep-peep! Side de bhai!', isHit ? '#ef4444' : '#facc15');
         this.audio.playScooterDoubleHorn();
-        this.audio.playVoiceChatter(195, 3);
+        this.audio.speakLine('Side de bhai!', 'customer_urgent', false);
         break;
       }
       case 'stray_dog': {
         this.showCallout('Hatt! Bhau-bhau!', isHit ? '#f97316' : '#fbbf24');
         this.audio.playStrayDogBark();
-        this.audio.playVoiceChatter(265, 2);
         break;
       }
     }
@@ -931,6 +1035,7 @@ export class TempleRunEngine {
       this.velocityY = gear.jumpVelocity;
       this.isSliding = false;
       this.slideTimer = 0;
+      this.fastDropRollTimer = 0;
       this.audio.playJump();
     }
   }
@@ -941,26 +1046,40 @@ export class TempleRunEngine {
       this.velocityY = -36;
       this.isSliding = true;
       this.slideTimer = 0.68;
+      this.fastDropRollTimer = 0.34;
       this.audio.playFastDrop();
       return;
     }
     if (!this.isSliding) {
       this.isSliding = true;
       this.slideTimer = 0.64;
+      this.fastDropRollTimer = 0.28;
       this.audio.playSlide();
     }
   }
 
   private isHoverboardActive(): boolean {
-    return this.save.equippedAbility === 'tea_shield' && this.abilityActiveTimer > 0;
+    if (this.abilityActiveTimer <= 0) return false;
+    return (
+      this.activePowerUpKind === 'chai_board' ||
+      (this.activePowerUpKind === null && this.save.equippedAbility === 'tea_shield')
+    );
   }
 
   private isTurboDashActive(): boolean {
-    return this.save.equippedAbility === 'chai_dash' && this.abilityActiveTimer > 0;
+    if (this.abilityActiveTimer <= 0) return false;
+    return (
+      this.activePowerUpKind === 'kadak_boost' ||
+      (this.activePowerUpKind === null && this.save.equippedAbility === 'chai_dash')
+    );
   }
 
   private isMagnetActive(): boolean {
-    return this.save.equippedAbility === 'coin_magnet' && this.abilityActiveTimer > 0;
+    if (this.abilityActiveTimer <= 0) return false;
+    return (
+      this.activePowerUpKind === 'coin_magnet' ||
+      (this.activePowerUpKind === null && this.save.equippedAbility === 'coin_magnet')
+    );
   }
 
   private spawnBurst(x: number, y: number, z: number, colorHex: string | number, count = 14): void {
@@ -1003,6 +1122,7 @@ export class TempleRunEngine {
   }
 
   private enterTeaShopPitStop(): void {
+    this.audio.stopAllGameplayAudio();
     this.audio.playTeaShopArrive();
     this.teaShop.group.visible = true;
     this.teaShop.group.position.set(0, 0, -4.4);
@@ -1014,13 +1134,13 @@ export class TempleRunEngine {
     this.playerX = 0;
     this.playerY = 0;
     this.isSliding = false;
+    this.fastDropRollTimer = 0;
 
     const st = getStreetPhase(this.streetPhase);
     this.customerPack.root.visible = true;
     this.setPhase('teashop');
 
     if (this.runCoins < st.chaiPrice) {
-      this.audio.playVoiceChatter(185, 4);
       this.showCallout('Pehle paisa, phir chai! Pocket khali hai kya?', '#f97316');
     } else {
       this.showCallout('CUSTOMERS ARE LOOKING FOR YOU!', '#fbbf24');
@@ -1032,6 +1152,7 @@ export class TempleRunEngine {
     this.refillCount += 1;
     this.uturnTimer = 1.65;
     this.screenShake = 0.42;
+    this.audio.cancelSpeech();
     this.audio.playFunnyUTurn();
 
     this.flyingCup.visible = true;
@@ -1046,7 +1167,23 @@ export class TempleRunEngine {
     this.emitHud();
   }
 
+  /**
+   * Direct Ending Flow: Immediately silences all gameplay audio/voices, clears transient HUD banners,
+   * persists rewards, and transitions directly to 'stageclear' so App.tsx launches the exact mapped
+   * ending MP4 cutscene and then displays the Boss Verdict Card cleanly (zero pre-result pan/delay!).
+   */
   private enterStageClearAtPCSolution(): void {
+    this.audio.stopAllGameplayAudio();
+    this.bannerText = null;
+    this.bannerSubtext = null;
+    this.bannerTimer = 0;
+    this.calloutText = null;
+    this.calloutAccent = null;
+    this.calloutTimer = 0;
+    this.lastPowerUpLabel = null;
+    this.lastPowerUpAccent = null;
+    this.powerUpToastTimer = 0;
+
     const gear = computeGearStats(this.save.gearLevels);
     const st = getStreetPhase(this.streetPhase);
     const evaluation = evaluateBossVerdict({
@@ -1080,63 +1217,29 @@ export class TempleRunEngine {
       totalTeaCups: prev.totalTeaCups + this.teaCupsCollected,
     }));
 
-    // Stage the exact 3D PC Solution arrival scene!
-    this.pcSolution.group.visible = true;
-    this.pcSolution.group.position.set(0, 0, -4.6);
-    this.pcSolution.workDesk.visible = false;
-    this.teaShop.group.visible = false;
-
-    this.runner.root.position.set(-0.9, 0, 0.25);
-    this.runner.root.rotation.y = 0.35;
-    this.bossRig.root.visible = true;
-    this.bossRig.root.position.set(0.95, 0, -0.25);
-    this.bossRig.root.rotation.y = -0.35;
-
-    if (evaluation.verdict === 'vip_party') {
-      // Everyone (You, Boss, and 3 Needy Customers) sips hot chai together!
-      this.customerPack.root.visible = true;
-      this.customerPack.members[0].root.position.set(-2.25, 0, -0.75);
-      this.customerPack.members[1].root.position.set(0.05, 0, -1.55);
-      this.customerPack.members[2].root.position.set(2.35, 0, -0.75);
-      this.audio.playBossPraise();
-      this.audio.playCupClink();
-      this.spawnBurst(0, 2.3, 0, 0xfde047, 30);
-      this.spawnBurst(0, 2.5, 0, 0x34d399, 22);
-    } else if (evaluation.verdict === 'double_win') {
-      // You & Boss clink cups while Needy Customers peek jealously around the corner!
-      this.customerPack.root.visible = true;
-      this.customerPack.members[0].root.position.set(-3.2, 0, -1.8);
-      this.customerPack.members[1].root.position.set(-3.5, 0, -2.5);
-      this.customerPack.members[2].root.position.set(-2.9, 0, -3.1);
-      this.audio.playBossPraise();
-      this.audio.playCupClink();
-      this.spawnBurst(0, 2.2, 0, 0xfde047, 24);
-    } else if (evaluation.verdict === 'boss_only_sad') {
-      // Boss praises while sipping the sole cup; runner stands comedically sad with stomach rumble!
-      this.customerPack.root.visible = false;
-      this.audio.playBossPraise();
-      this.audio.playStomachRumble();
-      this.spawnBurst(0.95, 2.2, -0.25, 0xfde047, 16);
-    } else if (evaluation.verdict === 'empty_cup') {
-      // 2 hits taken: Boss tilts almost-empty cup upside down with single drip sound & deadpan stare!
-      this.customerPack.root.visible = false;
-      this.audio.playSingleDrip();
-    } else if (evaluation.verdict === 'half_empty') {
-      // 1 hit taken: Boss inspects half-empty cup suspiciously; runner has chai stain!
-      this.customerPack.root.visible = false;
-      this.audio.playBossScold();
-    } else {
-      // Scolded (late / refilled / udhaar)
-      this.customerPack.root.visible = false;
-      this.audio.playBossScold();
-    }
-
-    this.setPhase('stageclear');
+    // Clean quiet backdrop behind the Boss Verdict Card after the MP4 finishes
+    this.positionTitleShowcase();
     this.emitHud();
+    this.setPhase('stageclear');
   }
 
-  /** Caught by Needy Customers -> Furious Boss forces VERY SAD crying player to fix stacked laptops! */
+  /**
+   * Direct Caught Flow: Immediately silences gameplay audio/voices, clears HUD overlays,
+   * persists earned coins/score, and transitions directly to 'caught' so App.tsx immediately
+   * plays /assets/aistudio/ending-caught.mp4 followed by the Boss Verdict Card.
+   */
   private enterCaughtForcedToWork(): void {
+    this.audio.stopAllGameplayAudio();
+    this.bannerText = null;
+    this.bannerSubtext = null;
+    this.bannerTimer = 0;
+    this.calloutText = null;
+    this.calloutAccent = null;
+    this.calloutTimer = 0;
+    this.lastPowerUpLabel = null;
+    this.lastPowerUpAccent = null;
+    this.powerUpToastTimer = 0;
+
     this.bossVerdict = 'angry_work';
     this.playerMood = 'very_sad_crying';
     this.chaiConditionLabel = 'No Chai · Forced To Work!';
@@ -1155,27 +1258,9 @@ export class TempleRunEngine {
       totalTeaCups: prev.totalTeaCups + this.teaCupsCollected,
     }));
 
-    this.pcSolution.group.visible = true;
-    this.pcSolution.group.position.set(0, 0, -4.6);
-    this.pcSolution.workDesk.visible = true;
-    this.teaShop.group.visible = false;
-    this.flyingCup.visible = false;
-
-    this.runner.root.position.set(-0.1, -0.15, -1.95);
-    this.runner.root.rotation.y = 0.06;
-
-    this.bossRig.root.visible = true;
-    this.bossRig.root.position.set(1.65, 0, -1.55);
-    this.bossRig.root.rotation.y = -0.55;
-
-    this.customerPack.root.visible = true;
-    this.customerPack.members[0].root.position.set(-2.05, 0, -1.2);
-    this.customerPack.members[1].root.position.set(-1.35, 0, -2.55);
-    this.customerPack.members[2].root.position.set(2.55, 0, -2.2);
-
-    this.audio.playCaughtCrying();
-    this.setPhase('caught');
+    this.positionTitleShowcase();
     this.emitHud();
+    this.setPhase('caught');
   }
 
   private tick(): void {
@@ -1202,6 +1287,13 @@ export class TempleRunEngine {
         this.calloutAccent = null;
       }
     }
+    if (this.powerUpToastTimer > 0) {
+      this.powerUpToastTimer -= dt;
+      if (this.powerUpToastTimer <= 0) {
+        this.lastPowerUpLabel = null;
+        this.lastPowerUpAccent = null;
+      }
+    }
     if (this.obstacleCalloutCooldown > 0) {
       this.obstacleCalloutCooldown = Math.max(0, this.obstacleCalloutCooldown - dt);
     }
@@ -1214,7 +1306,7 @@ export class TempleRunEngine {
       customersPacified: this.customersPacified,
     });
 
-    if (this.phase === 'title') {
+    if (this.phase === 'title' || this.phase === 'stageclear' || this.phase === 'caught') {
       this.updateTitleScene(dt);
     } else if (this.phase === 'intro') {
       this.updateIntroCutscene(dt);
@@ -1224,11 +1316,18 @@ export class TempleRunEngine {
       this.updateTeaShopScene(dt);
     } else if (this.phase === 'uturn') {
       this.updateFunnyUTurnCutscene(dt);
-    } else if (this.phase === 'stageclear') {
-      this.updateStageClearScene(dt);
-    } else if (this.phase === 'caught') {
-      this.updateCaughtCryingScene(dt);
     }
+
+    // Keep golden sky dome centered around camera & sun shadow frustum focused cleanly
+    this.skyDome.position.copy(this.camera.position);
+    if (this.phase === 'playing') {
+      this.sunLight.target.position.set(this.playerX * 0.5, 0, -10);
+      this.sunLight.position.set(this.playerX * 0.5 + 16, 22, 10);
+    } else {
+      this.sunLight.target.position.set(0, 1.5, -2.5);
+      this.sunLight.position.set(16, 22, 16);
+    }
+    this.sunLight.target.updateMatrixWorld();
 
     this.renderer.render(this.scene, this.camera);
 
@@ -1254,7 +1353,7 @@ export class TempleRunEngine {
     });
     animateBossRig(this.bossRig, 'idle', this.runAnimTime);
 
-    const sway = Math.sin(this.runAnimTime * 0.55) * 0.45;
+    const sway = Math.sin(this.runAnimTime * 0.52) * 0.36;
     const titleCam = this.computeTitleCameraTarget(sway);
     this.dampCamera(titleCam.pos, titleCam.look, titleCam.fov, dt, 4.5);
   }
@@ -1304,7 +1403,11 @@ export class TempleRunEngine {
       const chaseY = this.getGameplayChaseY();
       const chaseZ = this.getGameplayChaseZ();
       const p = this.getPortraitFactor();
-      _vec3A.set(0, THREE.MathUtils.lerp(2.2 + p * 0.4, chaseY, whip), THREE.MathUtils.lerp(2.6 + p * 1.1, chaseZ, whip));
+      _vec3A.set(
+        0,
+        THREE.MathUtils.lerp(2.2 + p * 0.4, chaseY, whip),
+        THREE.MathUtils.lerp(2.6 + p * 1.1, chaseZ, whip)
+      );
       _vec3B.set(0, 1.55, THREE.MathUtils.lerp(0, -11, whip));
       this.dampCamera(
         _vec3A,
@@ -1333,7 +1436,6 @@ export class TempleRunEngine {
       hoverboardActive: false,
     });
 
-    // Tea Uncle shakes his head sternly if player's pockets are empty!
     this.teaShop.vendorHead.rotation.y = isEmptyPockets
       ? Math.sin(this.runAnimTime * 7.5) * 0.45
       : Math.sin(this.runAnimTime * 1.6) * 0.16;
@@ -1433,94 +1535,6 @@ export class TempleRunEngine {
     }
   }
 
-  private updateStageClearScene(dt: number): void {
-    let runnerMode: RunnerAnimMode = 'celebrate';
-    let bossMode: BossAnimMode = 'praise';
-    let customerMode: CustomerPackMode = 'hidden';
-    let stainLevel: 0 | 1 | 2 = 0;
-    let runnerCarrying = false;
-
-    if (this.bossVerdict === 'vip_party') {
-      runnerMode = 'happy_clink';
-      bossMode = 'vip_party';
-      customerMode = 'vip_sip_party';
-      runnerCarrying = true;
-    } else if (this.bossVerdict === 'double_win') {
-      runnerMode = 'happy_clink';
-      bossMode = 'double_clink';
-      customerMode = 'jealous_peek';
-      runnerCarrying = true;
-    } else if (this.bossVerdict === 'boss_only_sad') {
-      runnerMode = 'sad_hungry';
-      bossMode = 'praise';
-      runnerCarrying = false;
-    } else if (this.bossVerdict === 'half_empty') {
-      runnerMode = 'sad_embarrassed';
-      bossMode = 'inspect_half_empty';
-      stainLevel = 1;
-      runnerCarrying = false;
-    } else if (this.bossVerdict === 'empty_cup') {
-      runnerMode = 'sad_embarrassed';
-      bossMode = 'tilt_empty_drip';
-      stainLevel = 2;
-      runnerCarrying = false;
-    } else {
-      runnerMode = 'scolded';
-      bossMode = 'scold';
-      runnerCarrying = true;
-    }
-
-    animateRunnerRig(this.runner, {
-      mode: runnerMode,
-      runTime: this.runAnimTime,
-      laneLean: 0,
-      carryingChai: runnerCarrying,
-      chaiTier: this.chaiTier === 'boss_and_me' || this.chaiTier === 'vip_tray' ? 'boss_only' : this.chaiTier,
-      stainLevel,
-      hoverboardActive: false,
-    });
-    animateBossRig(this.bossRig, bossMode, this.runAnimTime);
-
-    if (customerMode !== 'hidden') {
-      animateNeedyCustomerPack(this.customerPack, {
-        mode: customerMode,
-        t: this.runAnimTime,
-        targetX: 0,
-        baseZ: -1.4,
-      });
-    }
-
-    const sway = Math.sin(this.runAnimTime * 0.7) * 0.35;
-    const p = this.getPortraitFactor();
-    _vec3A.set(sway, 2.3 + p * 0.85, 5.0 * (1 + p * 0.48));
-    _vec3B.set(0.05, 1.85 + p * 0.35, -1.2);
-    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(54, 80), dt, 5);
-  }
-
-  private updateCaughtCryingScene(dt: number): void {
-    animateRunnerRig(this.runner, {
-      mode: 'crying_work',
-      runTime: this.runAnimTime,
-      laneLean: 0,
-      carryingChai: false,
-      stainLevel: 0,
-      hoverboardActive: false,
-    });
-    animateBossRig(this.bossRig, 'angry_work', this.runAnimTime);
-    animateNeedyCustomerPack(this.customerPack, {
-      mode: 'point_demanding',
-      t: this.runAnimTime,
-      targetX: 0,
-      baseZ: -1.5,
-    });
-
-    const sway = Math.sin(this.runAnimTime * 0.8) * 0.32;
-    const p = this.getPortraitFactor();
-    _vec3A.set(0.2 + sway, 2.35 + p * 0.7, 3.65 * (1 + p * 0.52));
-    _vec3B.set(0.35, 1.45 + p * 0.25, -1.75);
-    this.dampCamera(_vec3A, _vec3B, this.getResponsiveFov(52, 78), dt, 5);
-  }
-
   private updatePlaying(dt: number): void {
     const gear = computeGearStats(this.save.gearLevels);
     const st = getStreetPhase(this.streetPhase);
@@ -1528,10 +1542,15 @@ export class TempleRunEngine {
     this.elapsedSec += dt;
     if (this.teaRushTimer > 0) this.teaRushTimer = Math.max(0, this.teaRushTimer - dt);
     if (this.abilityCooldown > 0) this.abilityCooldown = Math.max(0, this.abilityCooldown - dt);
-    if (this.abilityActiveTimer > 0)
+    if (this.abilityActiveTimer > 0) {
       this.abilityActiveTimer = Math.max(0, this.abilityActiveTimer - dt);
-    if (this.invulnerableTimer > 0)
+      if (this.abilityActiveTimer <= 0) {
+        this.activePowerUpKind = null;
+      }
+    }
+    if (this.invulnerableTimer > 0) {
       this.invulnerableTimer = Math.max(0, this.invulnerableTimer - dt);
+    }
     if (this.coinComboTimer > 0) {
       this.coinComboTimer -= dt;
       if (this.coinComboTimer <= 0) this.coinCombo = 0;
@@ -1541,7 +1560,6 @@ export class TempleRunEngine {
       this.stumbleWarningTimer = Math.max(0, this.stumbleWarningTimer - dt);
     }
 
-    // Pacified Needy Customers (Tier 3 VIP Tray) follow calmly and toss hilarious tech reminders!
     if (this.leg === 'to_pc_solution' && this.customersPacified) {
       this.customerProximity = THREE.MathUtils.damp(this.customerProximity, 0.22, 2.0, dt);
       this.pacifiedChatterTimer -= dt;
@@ -1550,7 +1568,7 @@ export class TempleRunEngine {
         const reminder =
           PACIFIED_REMINDERS[Math.floor(Math.random() * PACIFIED_REMINDERS.length)];
         this.showCallout(reminder, '#34d399');
-        this.audio.playVoiceChatter(235, 3);
+        this.audio.speakLine(reminder, 'happy_customer', false);
       }
     } else {
       const targetProx =
@@ -1585,17 +1603,21 @@ export class TempleRunEngine {
       return;
     }
 
-    // Snappy Subway Surfers 3-lane lateral motion & banking lean
+    // Snappy 3-lane lateral motion & banking lean
     const targetX = LANE_X[this.currentLane];
     this.playerX = THREE.MathUtils.damp(this.playerX, targetX, gear.laneLerpSpeed, dt);
     this.laneLean = THREE.MathUtils.damp(this.laneLean, (targetX - this.playerX) * 0.24, 14, dt);
 
+    const wasAirborne = this.playerY > 0.08;
     if (this.playerY > 0 || this.velocityY > 0) {
       this.playerY += this.velocityY * dt;
       this.velocityY -= 38 * dt;
       if (this.playerY <= 0) {
         this.playerY = 0;
         this.velocityY = 0;
+        if (wasAirborne && this.isSliding) {
+          this.spawnBurst(this.playerX, 0.14, 0.2, 0xd9c2a3, 7);
+        }
       }
     }
 
@@ -1603,21 +1625,30 @@ export class TempleRunEngine {
       this.slideTimer -= dt;
       if (this.slideTimer <= 0) this.isSliding = false;
     }
+    if (this.fastDropRollTimer > 0) {
+      this.fastDropRollTimer = Math.max(0, this.fastDropRollTimer - dt);
+    }
 
     this.runner.root.position.set(this.playerX, this.playerY, 0);
     this.runner.root.rotation.y = Math.PI;
     this.runner.shadowBlob.scale.setScalar(Math.max(0.45, 1 - this.playerY * 0.16));
 
     const hoverActive = this.isHoverboardActive();
+    const boostActive = this.isTurboDashActive() || this.teaRushTimer > 0;
     this.runner.shieldAura.visible = hoverActive || this.invulnerableTimer > 0.2;
     this.runner.magnetRing.visible = this.isMagnetActive();
     this.runner.magnetRing.rotation.z = this.runAnimTime * 4;
-    this.runner.dashFlame.visible = this.isTurboDashActive() || this.teaRushTimer > 0;
+    this.runner.dashFlame.visible = boostActive;
     this.runner.dashFlame.scale.setScalar(0.9 + Math.sin(this.runAnimTime * 28) * 0.14);
 
     let animMode: RunnerAnimMode = 'run';
     if (this.isSliding && this.playerY <= 0.15) animMode = 'slide';
     else if (this.playerY > 0.18) animMode = 'jump';
+
+    const rollProgress =
+      this.fastDropRollTimer > 0 && this.playerY <= 0.35
+        ? 1 - this.fastDropRollTimer / 0.34
+        : 0;
 
     const liveStain: 0 | 1 | 2 =
       this.leg === 'to_pc_solution'
@@ -1636,6 +1667,8 @@ export class TempleRunEngine {
       chaiTier: this.chaiTier,
       stainLevel: liveStain,
       hoverboardActive: hoverActive,
+      rollProgress,
+      boostActive,
     });
 
     const customerZ = this.customersPacified
@@ -1661,7 +1694,6 @@ export class TempleRunEngine {
         }
         const worldZ = seg.group.position.z + obs.localZ;
 
-        // Trigger authentic Indian tech-market comedy callouts & SFX when passing close!
         if (
           !obs.hit &&
           !obs.nearMissed &&
@@ -1696,7 +1728,8 @@ export class TempleRunEngine {
 
       for (const pickup of seg.pickups) {
         if (pickup.collected) continue;
-        pickup.mesh.rotation.y += (pickup.type === 'teacup' ? 2.4 : 3.2) * dt;
+        pickup.mesh.rotation.y +=
+          (pickup.type === 'powerup' ? 2.8 : pickup.type === 'teacup' ? 2.4 : 3.2) * dt;
         const worldZ = seg.group.position.z + pickup.mesh.position.z;
         const worldX = pickup.mesh.position.x;
 
@@ -1706,7 +1739,12 @@ export class TempleRunEngine {
         const distSq = dx * dx + dy * dy + distZ * distZ;
 
         if (pickup.type === 'coin' && distSq < magnetPullRadius * magnetPullRadius) {
-          pickup.mesh.position.x = THREE.MathUtils.damp(pickup.mesh.position.x, this.playerX, 16, dt);
+          pickup.mesh.position.x = THREE.MathUtils.damp(
+            pickup.mesh.position.x,
+            this.playerX,
+            16,
+            dt
+          );
           pickup.mesh.position.y = THREE.MathUtils.damp(
             pickup.mesh.position.y,
             this.playerY + 1.05,
@@ -1727,7 +1765,7 @@ export class TempleRunEngine {
         const nx = this.playerX - pickup.mesh.position.x;
         const ny = this.playerY + 1.0 - pickup.mesh.position.y;
         const nz = -(seg.group.position.z + pickup.mesh.position.z);
-        if (nx * nx + ny * ny + nz * nz < 1.38 * 1.38) {
+        if (nx * nx + ny * ny + nz * nz < 1.42 * 1.42) {
           pickup.collected = true;
           pickup.mesh.visible = false;
           if (pickup.type === 'coin') {
@@ -1738,7 +1776,6 @@ export class TempleRunEngine {
             this.audio.playCoin(this.coinCombo);
             this.spawnBurst(this.playerX, this.playerY + 1.05, 0, 0xfacc15, 6);
 
-            // Bright green chime + 'CHAI MONEY READY!' once player hits base chai cost in Leg 1!
             if (
               this.leg === 'to_teashop' &&
               !this.chaiMoneyReadyTriggered &&
@@ -1749,6 +1786,8 @@ export class TempleRunEngine {
               this.spawnBurst(this.playerX, this.playerY + 1.5, 0, 0x34d399, 18);
               this.showCallout('CHAI MONEY READY!', '#34d399');
             }
+          } else if (pickup.type === 'powerup' && pickup.powerUpKind) {
+            this.collectLanePowerUp(pickup.powerUpKind, gear);
           } else {
             this.teaCupsCollected += 1;
             this.teaRushTimer = gear.teaRushDuration;
@@ -1777,13 +1816,52 @@ export class TempleRunEngine {
     const baseChaseFov = this.getResponsiveFov(58, 80);
     const targetFov = Math.min(
       88,
-      baseChaseFov + (this.teaRushTimer > 0 ? 6 : 0) + (this.isTurboDashActive() ? 8 : 0) + speedRatio * 4
+      baseChaseFov +
+        (this.teaRushTimer > 0 ? 6 : 0) +
+        (this.isTurboDashActive() ? 8 : 0) +
+        speedRatio * 4
     );
     const chaseY = this.getGameplayChaseY();
     const chaseZ = this.getGameplayChaseZ();
     _vec3A.set(this.playerX * 0.62 + shakeX, chaseY + this.playerY * 0.32 + shakeY, chaseZ);
     _vec3B.set(this.playerX * 0.35, 1.55 + this.playerY * 0.25, -11);
     this.dampCamera(_vec3A, _vec3B, targetFov, dt, 10);
+  }
+
+  private collectLanePowerUp(
+    kind: PowerUpKind,
+    gear: ReturnType<typeof computeGearStats>
+  ): void {
+    this.audio.playPowerUpPickup();
+    this.score += Math.round(150 * this.speedMultiplier);
+
+    if (kind === 'extra_tea') {
+      // Instant Tea Restore! Restores +1 tea hit on Leg 2 + instant Tea Rush boost
+      if (this.leg === 'to_pc_solution') {
+        this.teaHitsRemaining = Math.min(MAX_TEA_HITS, this.teaHitsRemaining + 1);
+      }
+      this.teaCupsCollected += 1;
+      this.teaRushTimer = Math.max(this.teaRushTimer, gear.teaRushDuration);
+      this.teaRushMax = gear.teaRushDuration;
+      this.spawnBurst(this.playerX, this.playerY + 1.25, 0, 0x22c55e, 18);
+      this.showPowerUpToast('EXTRA TEA RESTORED!', '#4ade80');
+      this.emitHud();
+      return;
+    }
+
+    // Store in bottom-right slot for tap-to-use!
+    this.storedPowerUp = kind;
+    if (kind === 'chai_board') {
+      this.spawnBurst(this.playerX, this.playerY + 1.2, 0, 0x34d399, 16);
+      this.showPowerUpToast('CHAI-BOARD STORED! TAP TO USE', '#34d399');
+    } else if (kind === 'coin_magnet') {
+      this.spawnBurst(this.playerX, this.playerY + 1.2, 0, 0xf5c851, 16);
+      this.showPowerUpToast('COIN MAGNET STORED! TAP TO USE', '#f5c851');
+    } else {
+      this.spawnBurst(this.playerX, this.playerY + 1.2, 0, 0xfb923c, 16);
+      this.showPowerUpToast('KADAK BOOST STORED! TAP TO USE', '#fb923c');
+    }
+    this.emitHud();
   }
 
   private handleObstacleImpact(obs: ActiveObstacle, isInvincible: boolean): void {
@@ -1874,10 +1952,10 @@ export class TempleRunEngine {
   }
 
   /** Responsive horizontal-FOV compensation so narrow phones frame the full street & storefront */
-  private getResponsiveFov(baseFov: number, maxPortraitFov = 82): number {
+  private getResponsiveFov(baseFov: number, maxPortraitFov = 80): number {
     const p = this.getPortraitFactor();
     if (p <= 0) return baseFov;
-    const widened = Math.min(maxPortraitFov, baseFov + 26);
+    const widened = Math.min(maxPortraitFov, baseFov + 24);
     return THREE.MathUtils.lerp(baseFov, widened, p);
   }
 
@@ -1890,7 +1968,11 @@ export class TempleRunEngine {
     return 4.15 * (1 + this.getPortraitFactor() * 0.24);
   }
 
-  /** Computes Title Screen camera so the full PC Solution storefront + Canon boxes fit cleanly on both desktop and portrait phones */
+  /**
+   * Computes Title Screen camera so the full golden-lit PC Solution storefront (including ASUS/EPSON/pc solution
+   * & stacked Canon boxes on both sides) sits cleanly BELOW the top HTML title crest and both 3D characters
+   * stand visibly ABOVE the bottom dark UI card on desktop and portrait phones.
+   */
   private computeTitleCameraTarget(sway: number): {
     pos: THREE.Vector3;
     look: THREE.Vector3;
@@ -1898,25 +1980,25 @@ export class TempleRunEngine {
   } {
     const aspect = this.camera?.aspect ?? 1;
     const p = this.getPortraitFactor();
-    const fov = this.getResponsiveFov(56, 82);
+    const fov = this.getResponsiveFov(56, 80);
 
-    let titleZ = 5.2;
-    let titleY = 2.35;
-    let lookY = 2.05;
+    // Wide cinematic diorama framing: golden-hour sky visible above EPSON/ASUS/PC Solution,
+    // zero overlap with top HTML crest, and full-body characters + contact shadows cleanly above bottom card!
+    let titleZ = 13.8;
+    let titleY = 3.25;
+    let lookY = 3.95;
 
     if (aspect < 1) {
-      // Storefront sign (10.8m wide, ±5.4m) + stacked Canon boxes sit around z = -2.62.
-      // Pull back smoothly (~35%+ and up to exact horizontal fit on narrow phones) so both sides fit cleanly!
       const halfTanV = Math.tan(THREE.MathUtils.degToRad(fov * 0.5));
-      const neededDist = 5.75 / Math.max(0.18, halfTanV * aspect);
-      const minPullbackZ = 5.2 * (1 + p * 0.35);
-      titleZ = Math.max(minPullbackZ, Math.min(12.6, -2.62 + neededDist));
-      titleY = 2.35 + p * 1.05;
-      lookY = 2.05 + p * 0.75;
+      const neededDist = 6.35 / Math.max(0.18, halfTanV * aspect);
+      const minPullbackZ = 11.2 * (1 + p * 0.24);
+      titleZ = Math.max(minPullbackZ, Math.min(15.2, -2.62 + neededDist));
+      titleY = 3.25 + p * 0.65;
+      lookY = 3.85 + p * 0.7;
     }
 
     _vec3A.set(sway * (1 - p * 0.55), titleY, titleZ);
-    _vec3B.set(0.08 * (1 - p * 0.6), lookY, -2.5);
+    _vec3B.set(0.05 * (1 - p * 0.6), lookY, -2.5);
     return { pos: _vec3A, look: _vec3B, fov };
   }
 
@@ -1986,6 +2068,10 @@ export class TempleRunEngine {
       abilityActiveTimer: this.abilityActiveTimer,
       abilityActiveMax: this.abilityActiveMax,
       secondWindAvailable: this.secondWindAvailable,
+      storedPowerUp: this.storedPowerUp,
+      activePowerUpKind: this.activePowerUpKind,
+      lastPowerUpLabel: this.lastPowerUpLabel,
+      lastPowerUpAccent: this.lastPowerUpAccent,
       isNewBest: this.isNewBest,
       bossVerdict: this.bossVerdict,
       playerMood: this.playerMood,
@@ -2025,9 +2111,6 @@ export class TempleRunEngine {
     } else if (this.phase === 'paused' && (e.code === 'Escape' || e.code === 'KeyP')) {
       e.preventDefault();
       this.togglePause();
-    } else if (this.phase === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
-      e.preventDefault();
-      this.startRun(1, false);
     } else if (this.phase === 'teashop' && (e.code === 'Enter' || e.code === 'Space')) {
       e.preventDefault();
       const st = getStreetPhase(this.streetPhase);
@@ -2084,7 +2167,7 @@ export class TempleRunEngine {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = w / Math.max(1, h);
-    if (this.phase === 'title') {
+    if (this.phase === 'title' || this.phase === 'stageclear' || this.phase === 'caught') {
       const titleCam = this.computeTitleCameraTarget(0);
       this.camPos.copy(titleCam.pos);
       this.camLook.copy(titleCam.look);
@@ -2107,6 +2190,8 @@ export class TempleRunEngine {
   private attachEventListeners(): void {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('orientationchange', this.onResize);
+    window.visualViewport?.addEventListener('resize', this.onResize);
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', this.onPointerDown);
     el.addEventListener('pointermove', this.onPointerMove);
@@ -2121,6 +2206,8 @@ export class TempleRunEngine {
 
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('orientationchange', this.onResize);
+    window.visualViewport?.removeEventListener('resize', this.onResize);
     const el = this.renderer.domElement;
     el.removeEventListener('pointerdown', this.onPointerDown);
     el.removeEventListener('pointermove', this.onPointerMove);

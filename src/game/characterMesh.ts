@@ -60,7 +60,7 @@ export interface RunnerRig {
   tearsGroup: THREE.Group;
   tearDrops: THREE.Mesh[];
   shadowBlob: THREE.Mesh;
-  faceMaterial: THREE.MeshBasicMaterial;
+  faceMaterial: THREE.MeshStandardMaterial;
 }
 
 export interface BossRig {
@@ -74,7 +74,7 @@ export interface BossRig {
   bossDripDrop: THREE.Mesh;
   angerAura: THREE.Group;
   praiseGlow: THREE.Mesh;
-  faceMaterial: THREE.MeshBasicMaterial;
+  faceMaterial: THREE.MeshStandardMaterial;
 }
 
 export interface NeedyCustomerMember {
@@ -96,6 +96,36 @@ export interface NeedyCustomerPack {
   members: NeedyCustomerMember[];
 }
 
+function makeGroundShadowBlob(radius: number, contactShadowMap?: THREE.Texture): THREE.Mesh {
+  if (contactShadowMap) {
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(radius * 2.35, radius * 2.35),
+      new THREE.MeshBasicMaterial({
+        map: contactShadowMap,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+      })
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.024;
+    return mesh;
+  }
+
+  const mesh = new THREE.Mesh(
+    new THREE.CircleGeometry(radius, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x0a0908,
+      transparent: true,
+      opacity: 0.44,
+      depthWrite: false,
+    })
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.024;
+  return mesh;
+}
+
 function makeShoe(color: number): THREE.Group {
   const g = new THREE.Group();
   const sole = new THREE.Mesh(
@@ -108,32 +138,44 @@ function makeShoe(color: number): THREE.Group {
     new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.1 })
   );
   upper.position.set(0, 0.09, 0.02);
+  upper.castShadow = true;
   g.add(sole, upper);
   return g;
 }
 
-/** Creates a slightly oversized, brightly lit, unmistakable oval photo-cutout face medallion */
+/**
+ * Golden-hour lit oval photo-portrait medallion seamlessly integrated into the 3D head
+ * using MeshStandardMaterial + warm soft fill so characters blend naturally into scene lighting.
+ */
 function createPhotoFacePlate(
   faceTexture: THREE.Texture,
   skinHex: number,
   radius = 0.355
-): { plate: THREE.Mesh; material: THREE.MeshBasicMaterial } {
-  const mat = new THREE.MeshBasicMaterial({
+): { plate: THREE.Mesh; material: THREE.MeshStandardMaterial } {
+  const mat = new THREE.MeshStandardMaterial({
     map: faceTexture,
-    color: 0xffffff,
+    color: 0xffebd6,
+    emissive: 0xffdfb8,
+    emissiveMap: faceTexture,
+    emissiveIntensity: 0.14,
+    roughness: 0.78,
+    metalness: 0.02,
+    transparent: true,
   });
   const geo = new THREE.CircleGeometry(radius, 36);
   const plate = new THREE.Mesh(geo, mat);
   plate.scale.set(0.95, 1.08, 1);
   plate.position.set(0, 0.02, 0.255);
+  plate.castShadow = false;
+  plate.receiveShadow = true;
 
   const rim = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius * 0.99, radius * 0.99, 0.04, 32),
-    new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.6 })
+    new THREE.CylinderGeometry(radius * 0.99, radius * 0.99, 0.045, 32),
+    new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.65 })
   );
   rim.rotation.x = Math.PI / 2;
   rim.scale.set(0.96, 1, 1.09);
-  rim.position.set(0, 0, -0.022);
+  rim.position.set(0, 0, -0.024);
   plate.add(rim);
 
   return { plate, material: mat };
@@ -226,7 +268,7 @@ function createTwoCupHolder(): THREE.Group {
   return g;
 }
 
-/** Tier 3: Full 5-Cup Cardboard Tray for Boss + Me + 3 Needy Customers! */
+/** Tier 3: Full 5-Cup Cardboard Tray for Boss + Me + 3 Needy Customers */
 function createFiveCupTray(): THREE.Group {
   const g = new THREE.Group();
   const tray = new THREE.Mesh(
@@ -263,6 +305,7 @@ function createChaiHoverboard(): THREE.Group {
     })
   );
   deck.position.y = 0.14;
+  deck.castShadow = true;
   board.add(deck);
 
   const stripe = new THREE.Mesh(
@@ -295,7 +338,8 @@ function createChaiHoverboard(): THREE.Group {
 export function createRunnerRig(
   profile: CharacterProfile,
   skin: SkinDefinition,
-  faceTexture: THREE.Texture
+  faceTexture: THREE.Texture,
+  contactShadowMap?: THREE.Texture
 ): RunnerRig {
   const root = new THREE.Group();
   const bodyPivot = new THREE.Group();
@@ -315,17 +359,7 @@ export function createRunnerRig(
   const pantsMat = new THREE.MeshStandardMaterial({ color: skin.pantsColor, roughness: 0.78 });
   const hairMat = new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.84 });
 
-  const shadowBlob = new THREE.Mesh(
-    new THREE.CircleGeometry(0.58, 24),
-    new THREE.MeshBasicMaterial({
-      color: 0x0a0908,
-      transparent: true,
-      opacity: 0.44,
-      depthWrite: false,
-    })
-  );
-  shadowBlob.rotation.x = -Math.PI / 2;
-  shadowBlob.position.y = 0.025;
+  const shadowBlob = makeGroundShadowBlob(0.62, contactShadowMap);
   root.add(shadowBlob);
 
   // Torso group
@@ -336,17 +370,19 @@ export function createRunnerRig(
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.68, 0.32), shirtMat);
   chest.position.y = 0.24;
   chest.castShadow = true;
+  chest.receiveShadow = true;
   torso.add(chest);
 
   const hips = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.22, 0.3), pantsMat);
   hips.position.y = -0.14;
+  hips.castShadow = true;
   torso.add(hips);
 
   const belt = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.07, 0.33), trimMat);
   belt.position.y = -0.04;
   torso.add(belt);
 
-  // Signature Black Embroidered Kurta placket & cream buttons matching Photo 1!
+  // Signature Black Embroidered Kurta placket & cream buttons
   if (skin.hasKurtaButtons) {
     const placket = new THREE.Mesh(
       new THREE.BoxGeometry(0.08, 0.44, 0.02),
@@ -355,7 +391,11 @@ export function createRunnerRig(
     placket.position.set(0, 0.35, 0.165);
     torso.add(placket);
 
-    const btnMat = new THREE.MeshStandardMaterial({ color: 0xf4ead5, roughness: 0.3, metalness: 0.2 });
+    const btnMat = new THREE.MeshStandardMaterial({
+      color: 0xf4ead5,
+      roughness: 0.3,
+      metalness: 0.2,
+    });
     for (let b = 0; b < 4; b++) {
       const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.015, 10), btnMat);
       btn.rotation.x = Math.PI / 2;
@@ -363,8 +403,11 @@ export function createRunnerRig(
       torso.add(btn);
     }
 
-    // Subtle diamond motif accents on the kurta chest
-    const motifMat = new THREE.MeshStandardMaterial({ color: 0x52555e, roughness: 0.5, metalness: 0.3 });
+    const motifMat = new THREE.MeshStandardMaterial({
+      color: 0x52555e,
+      roughness: 0.5,
+      metalness: 0.3,
+    });
     for (const [mx, my] of [
       [-0.17, 0.42],
       [0.17, 0.42],
@@ -424,7 +467,7 @@ export function createRunnerRig(
     torso.add(tail);
   }
 
-  // Visible 3D Masala Chai Stains on the runner's chest (shown when teaHitsRemaining === 2 or 1!)
+  // Visible 3D Masala Chai Stains on chest
   const stainMat = new THREE.MeshBasicMaterial({
     color: 0x9a4e1c,
     transparent: true,
@@ -446,7 +489,7 @@ export function createRunnerRig(
   neck.position.y = 0.62;
   torso.add(neck);
 
-  // Slightly oversized head with unmistakable high-res oval photo-cutout likeness!
+  // Head with golden-lit oval portrait likeness
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 0.98, 0.02);
   torso.add(headGroup);
@@ -454,6 +497,7 @@ export function createRunnerRig(
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.325, 24, 20), skinMat);
   skull.scale.set(0.96, 1.06, 0.68);
   skull.castShadow = true;
+  skull.receiveShadow = true;
   headGroup.add(skull);
 
   const { plate: facePlate, material: faceMaterial } = createPhotoFacePlate(
@@ -463,7 +507,6 @@ export function createRunnerRig(
   );
   headGroup.add(facePlate);
 
-  // Ears framing the face
   for (const side of [-1, 1]) {
     const ear = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 10), skinMat);
     ear.scale.set(0.55, 1.1, 0.7);
@@ -471,7 +514,6 @@ export function createRunnerRig(
     headGroup.add(ear);
   }
 
-  // Sculpted 3D hair framing the oval photo cutout without obscuring the face
   const backHair = new THREE.Mesh(
     new THREE.SphereGeometry(0.34, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.6),
     hairMat
@@ -479,6 +521,7 @@ export function createRunnerRig(
   backHair.scale.set(1, 1, 0.76);
   backHair.position.set(0, 0.055, -0.055);
   backHair.rotation.x = -0.32;
+  backHair.castShadow = true;
   headGroup.add(backHair);
 
   if (profile.hairStyle === 'spiky') {
@@ -491,7 +534,6 @@ export function createRunnerRig(
       headGroup.add(spike);
     }
   } else {
-    // Crisp short spiky crop matching Photo 1!
     for (let i = 0; i < 7; i++) {
       const angle = (i / 6 - 0.5) * 1.5;
       const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.1, 7), hairMat);
@@ -501,7 +543,6 @@ export function createRunnerRig(
     }
   }
 
-  // Comic anime-style blue Sweat Drop on temple (for Sad & Embarrassed reactions!)
   const sweatDrop = new THREE.Mesh(
     new THREE.ConeGeometry(0.055, 0.16, 10),
     new THREE.MeshStandardMaterial({
@@ -515,7 +556,6 @@ export function createRunnerRig(
   sweatDrop.visible = false;
   headGroup.add(sweatDrop);
 
-  // Animated 3D Crying Teardrop Streams (Very Sad — Caught & Forced to Work!)
   const tearsGroup = new THREE.Group();
   tearsGroup.visible = false;
   headGroup.add(tearsGroup);
@@ -546,15 +586,16 @@ export function createRunnerRig(
     tearDrops.push(drop);
   }
 
-  // Arms
   const makeArm = (side: -1 | 1): THREE.Group => {
     const arm = new THREE.Group();
     arm.position.set(side * 0.37, 0.5, 0);
     const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.088, 0.28, 12), shirtMat);
     sleeve.position.y = -0.11;
+    sleeve.castShadow = true;
     arm.add(sleeve);
     const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.068, 0.34, 12), skinMat);
     forearm.position.y = -0.38;
+    forearm.castShadow = true;
     arm.add(forearm);
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.078, 10, 10), skinMat);
     hand.position.y = -0.57;
@@ -566,26 +607,22 @@ export function createRunnerRig(
   const rightArm = makeArm(1);
   torso.add(leftArm, rightArm);
 
-  // Tier 1 / Udhaar: Single Steaming Chai Cup
   const singleCup = createMiniKulhad(true, 1.0);
   const carriedCup = singleCup.group;
   carriedCup.position.set(0, -0.56, 0.22);
   carriedCup.visible = false;
   rightArm.add(carriedCup);
 
-  // Tier 2: 2-Cup Cardboard Holder (Boss + Me!)
   const carriedTwoCup = createTwoCupHolder();
   carriedTwoCup.position.set(0, -0.56, 0.24);
   carriedTwoCup.visible = false;
   rightArm.add(carriedTwoCup);
 
-  // Tier 3: Full 5-Cup VIP Cardboard Tray!
   const carriedTray = createFiveCupTray();
   carriedTray.position.set(-0.08, -0.56, 0.28);
   carriedTray.visible = false;
   rightArm.add(carriedTray);
 
-  // Legs
   const makeLeg = (side: -1 | 1): THREE.Group => {
     const leg = new THREE.Group();
     leg.position.set(side * 0.155, 0.9, 0);
@@ -595,6 +632,7 @@ export function createRunnerRig(
     leg.add(thigh);
     const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.078, 0.42, 12), pantsMat);
     shin.position.y = -0.62;
+    shin.castShadow = true;
     leg.add(shin);
     const shoe = makeShoe(skin.shoeColor);
     shoe.position.y = -0.88;
@@ -690,6 +728,8 @@ export function animateRunnerRig(
     chaiTier?: ChaiTier | null;
     stainLevel?: 0 | 1 | 2;
     hoverboardActive: boolean;
+    rollProgress?: number;
+    boostActive?: boolean;
   }
 ): void {
   const {
@@ -700,6 +740,8 @@ export function animateRunnerRig(
     chaiTier = 'boss_only',
     stainLevel = 0,
     hoverboardActive,
+    rollProgress = 0,
+    boostActive = false,
   } = opts;
 
   const canCarryProp =
@@ -709,13 +751,15 @@ export function animateRunnerRig(
     mode !== 'sad_hungry' &&
     mode !== 'empty_pockets';
 
-  rig.carriedCup.visible = canCarryProp && (chaiTier === 'boss_only' || chaiTier === 'udhaar' || !chaiTier);
+  rig.carriedCup.visible =
+    canCarryProp && (chaiTier === 'boss_only' || chaiTier === 'udhaar' || !chaiTier);
   rig.carriedTwoCup.visible = canCarryProp && chaiTier === 'boss_and_me';
   rig.carriedTray.visible = canCarryProp && chaiTier === 'vip_tray';
 
   rig.chaiStainLight.visible = stainLevel >= 1;
   rig.chaiStainHeavy.visible = stainLevel >= 2;
-  rig.sweatDrop.visible = mode === 'sad_embarrassed' || mode === 'scolded' || mode === 'empty_pockets';
+  rig.sweatDrop.visible =
+    mode === 'sad_embarrassed' || mode === 'scolded' || mode === 'empty_pockets';
   rig.hoverboard.visible = hoverboardActive && (mode === 'run' || mode === 'jump');
   rig.tearsGroup.visible = mode === 'crying_work';
 
@@ -750,7 +794,6 @@ export function animateRunnerRig(
   }
 
   if (mode === 'empty_pockets') {
-    // Runner awkwardly pat-searching empty pockets at Sharma Chai Stall!
     const pat = Math.sin(runTime * 9.5);
     rig.torso.position.y = 1.03;
     rig.torso.rotation.x = 0.1;
@@ -813,7 +856,6 @@ export function animateRunnerRig(
   }
 
   if (mode === 'happy_clink') {
-    // Clinking chai cup joyfully with the Boss!
     const cheer = Math.abs(Math.sin(runTime * 4.5));
     rig.torso.position.y = 1.06 + cheer * 0.08;
     rig.headGroup.rotation.z = Math.sin(runTime * 3) * 0.08;
@@ -835,12 +877,11 @@ export function animateRunnerRig(
   }
 
   if (mode === 'sad_hungry') {
-    // Boss-Only Sacrifice: droopy head, empty hands clutching rumbling stomach!
     const sigh = Math.sin(runTime * 3.0);
     rig.torso.position.y = 1.01 + sigh * 0.015;
     rig.torso.rotation.x = 0.18;
     rig.headGroup.rotation.x = 0.26;
-    rig.headGroup.rotation.y = 0.22; // Eyeing Boss's cup enviously!
+    rig.headGroup.rotation.y = 0.22;
     rig.leftArm.rotation.set(-0.78, 0.55, -0.28);
     rig.rightArm.rotation.set(-0.78, -0.55, 0.28);
     rig.leftLeg.rotation.set(0, 0, 0);
@@ -849,15 +890,28 @@ export function animateRunnerRig(
   }
 
   if (mode === 'sad_embarrassed' || mode === 'scolded') {
-    // Slumped shoulders, guilty head-tilt, sweat drop!
     rig.torso.position.y = 1.0;
     rig.torso.rotation.x = 0.18;
     rig.headGroup.rotation.x = 0.24;
     rig.headGroup.rotation.y = Math.sin(runTime * 2.2) * 0.14;
     rig.leftArm.rotation.set(-0.25, 0.2, 0.1);
-    rig.rightArm.rotation.set(-0.95, -0.25, 0.35); // Rubbing back of neck awkwardly
+    rig.rightArm.rotation.set(-0.95, -0.25, 0.35);
     rig.leftLeg.rotation.set(0, 0, 0);
     rig.rightLeg.rotation.set(0, 0, 0);
+    return;
+  }
+
+  // Distinct Fast-Drop Somersault Roll!
+  if (rollProgress > 0.01) {
+    rig.bodyPivot.position.y = 0.45 * Math.sin(rollProgress * Math.PI) - 0.12;
+    rig.bodyPivot.rotation.x = -Math.PI * 2 * rollProgress;
+    rig.bodyPivot.rotation.z = laneLean * 0.25;
+    rig.torso.position.y = 0.92;
+    rig.torso.rotation.x = 0.45;
+    rig.leftLeg.rotation.set(-1.35, 0, 0);
+    rig.rightLeg.rotation.set(-1.25, 0, 0);
+    rig.leftArm.rotation.set(-1.1, 0.35, 0.3);
+    rig.rightArm.rotation.set(-1.1, -0.35, -0.3);
     return;
   }
 
@@ -866,31 +920,32 @@ export function animateRunnerRig(
     rig.torso.position.y = 0.9;
     rig.torso.rotation.x = -0.95;
     rig.bodyPivot.rotation.z = laneLean * 0.32;
-    rig.leftLeg.rotation.set(-1.3, 0, 0);
-    rig.rightLeg.rotation.set(-1.1, 0, 0);
-    rig.leftArm.rotation.set(-0.5, 0, 0.45);
-    rig.rightArm.rotation.set(canCarryProp ? -0.95 : -0.5, 0, -0.45);
+    rig.leftLeg.rotation.set(-1.35, 0, 0);
+    rig.rightLeg.rotation.set(-1.05, 0, 0);
+    rig.leftArm.rotation.set(-0.55, 0, 0.48);
+    rig.rightArm.rotation.set(canCarryProp ? -0.95 : -0.55, 0, -0.48);
     return;
   }
 
+  // Distinct energetic Jump Tuck
   if (mode === 'jump') {
-    rig.torso.position.y = 1.1;
-    rig.torso.rotation.x = 0.18;
-    rig.bodyPivot.rotation.z = laneLean * 0.55;
-    rig.leftLeg.rotation.set(0.65, 0, 0);
-    rig.rightLeg.rotation.set(-0.48, 0, 0);
-    rig.leftArm.rotation.set(-1.15, 0, 0.32);
-    rig.rightArm.rotation.set(canCarryProp ? -1.3 : -0.7, 0, -0.28);
+    rig.torso.position.y = 1.14;
+    rig.torso.rotation.x = 0.24;
+    rig.bodyPivot.rotation.z = laneLean * 0.58;
+    rig.leftLeg.rotation.set(-1.05, 0, 0.12);
+    rig.rightLeg.rotation.set(0.62, 0, -0.1);
+    rig.leftArm.rotation.set(-1.55, 0, 0.42);
+    rig.rightArm.rotation.set(canCarryProp ? -1.35 : -1.05, 0, -0.38);
     return;
   }
 
   if (hoverboardActive) {
-    const hoverBob = Math.sin(runTime * 8) * 0.04;
+    const hoverBob = Math.sin(runTime * 8) * 0.045;
     rig.bodyPivot.position.y = 0.24 + hoverBob;
     rig.bodyPivot.rotation.y = 0.35;
     rig.bodyPivot.rotation.z = laneLean * 0.6;
     rig.torso.position.y = 1.04;
-    rig.torso.rotation.x = 0.14;
+    rig.torso.rotation.x = 0.16;
     rig.leftArm.rotation.set(-0.45, 0, 0.65);
     rig.rightArm.rotation.set(canCarryProp ? -1.25 : -0.45, 0, -0.65);
     rig.leftLeg.rotation.set(0.22, 0, 0.14);
@@ -898,26 +953,30 @@ export function animateRunnerRig(
     return;
   }
 
-  const stride = Math.sin(runTime * 15.5);
-  const bob = Math.abs(Math.cos(runTime * 15.5)) * 0.1;
+  // Energetic sprint — with distinct aerodynamic Boost Lean when Kadak Boost / Tea Rush active!
+  const freq = boostActive ? 19.5 : 15.5;
+  const stride = Math.sin(runTime * freq);
+  const bob = Math.abs(Math.cos(runTime * freq)) * (boostActive ? 0.13 : 0.1);
   rig.torso.position.y = 1.05 + bob;
-  rig.torso.rotation.x = 0.17;
-  rig.bodyPivot.rotation.z = laneLean * 0.52;
-  rig.leftLeg.rotation.set(stride * 0.92, 0, 0);
-  rig.rightLeg.rotation.set(-stride * 0.92, 0, 0);
-  rig.leftArm.rotation.set(-stride * 0.85, 0, 0.16);
+  rig.torso.rotation.x = boostActive ? 0.36 : 0.17;
+  rig.bodyPivot.rotation.z = laneLean * (boostActive ? 0.62 : 0.52);
+  rig.leftLeg.rotation.set(stride * (boostActive ? 1.08 : 0.92), 0, 0);
+  rig.rightLeg.rotation.set(-stride * (boostActive ? 1.08 : 0.92), 0, 0);
+  rig.leftArm.rotation.set(-stride * (boostActive ? 1.05 : 0.85), 0, boostActive ? 0.28 : 0.16);
   rig.rightArm.rotation.set(
-    canCarryProp ? -1.35 + Math.sin(runTime * 15.5) * 0.08 : stride * 0.85,
+    canCarryProp ? -1.35 + Math.sin(runTime * freq) * 0.08 : stride * (boostActive ? 1.05 : 0.85),
     0,
-    canCarryProp ? -0.1 : -0.16
+    canCarryProp ? -0.1 : boostActive ? -0.28 : -0.16
   );
 }
 
 /**
- * 3D PC Solution Boss using the attached Boss photo cutout!
- * Now carries an inspectable Chai Cup + animated falling single drip drop for the deadpan 2-hit ending!
+ * 3D PC Solution Boss blended cleanly into the golden-hour lighting with grounded contact shadow.
  */
-export function createBossRig(faceTexture: THREE.Texture): BossRig {
+export function createBossRig(
+  faceTexture: THREE.Texture,
+  contactShadowMap?: THREE.Texture
+): BossRig {
   const root = new THREE.Group();
   const bodyPivot = new THREE.Group();
   root.add(bodyPivot);
@@ -928,22 +987,12 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
   const pantsMat = new THREE.MeshStandardMaterial({ color: 0x222731, roughness: 0.78 });
   const hairMat = new THREE.MeshStandardMaterial({ color: 0x1a1919, roughness: 0.85 });
 
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.62, 20),
-    new THREE.MeshBasicMaterial({
-      color: 0x0a0908,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false,
-    })
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.025;
-  root.add(shadow);
+  root.add(makeGroundShadowBlob(0.66, contactShadowMap));
 
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.74, 0.36), poloMat);
   torso.position.y = 1.32;
   torso.castShadow = true;
+  torso.receiveShadow = true;
   bodyPivot.add(torso);
 
   const collar = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.09, 0.38), trimMat);
@@ -957,6 +1006,7 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
   for (const side of [-1, 1]) {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.1, 0.88, 12), pantsMat);
     leg.position.set(side * 0.16, 0.5, 0);
+    leg.castShadow = true;
     bodyPivot.add(leg);
     const shoe = makeShoe(0x1f1b18);
     shoe.position.set(side * 0.16, 0, 0);
@@ -968,12 +1018,14 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
     arm.position.set(side * 0.41, 1.58, 0);
     const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.098, 0.28, 12), poloMat);
     sleeve.position.y = -0.12;
+    sleeve.castShadow = true;
     arm.add(sleeve);
     const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.102, 0.102, 0.055, 12), trimMat);
     cuff.position.y = -0.25;
     arm.add(cuff);
     const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.072, 0.34, 12), skinMat);
     forearm.position.y = -0.42;
+    forearm.castShadow = true;
     arm.add(forearm);
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), skinMat);
     hand.position.y = -0.6;
@@ -984,7 +1036,6 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
   const rightArm = makeBossArm(1);
   bodyPivot.add(leftArm, rightArm);
 
-  // Inspectable Boss Chai Cup in right hand + animated single falling drop!
   const cupBuilt = createMiniKulhad(false, 1.15);
   const bossCup = cupBuilt.group;
   bossCup.position.set(0, -0.58, 0.18);
@@ -1004,13 +1055,14 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
   bossDripDrop.visible = false;
   bodyPivot.add(bossDripDrop);
 
-  // Head with crisp oval photo-cutout of the attached Boss photo!
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 2.04, 0.02);
   bodyPivot.add(headGroup);
 
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 20), skinMat);
   skull.scale.set(0.96, 1.07, 0.68);
+  skull.castShadow = true;
+  skull.receiveShadow = true;
   headGroup.add(skull);
 
   const { plate, material: faceMaterial } = createPhotoFacePlate(
@@ -1028,6 +1080,7 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
   hair.scale.set(1, 1, 0.76);
   hair.position.set(0, 0.05, -0.05);
   hair.rotation.x = -0.25;
+  hair.castShadow = true;
   headGroup.add(hair);
 
   const angerAura = new THREE.Group();
@@ -1038,7 +1091,10 @@ export function createBossRig(faceTexture: THREE.Texture): BossRig {
     opacity: 0.78,
   });
   for (let i = 0; i < 4; i++) {
-    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.11 + (i % 2) * 0.04, 10, 10), redSteamMat);
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11 + (i % 2) * 0.04, 10, 10),
+      redSteamMat
+    );
     puff.position.set((i < 2 ? -1 : 1) * (0.42 + (i % 2) * 0.14), 2.15 + (i % 2) * 0.24, 0.05);
     angerAura.add(puff);
   }
@@ -1100,7 +1156,6 @@ export function animateBossRig(rig: BossRig, mode: BossAnimMode, t: number): voi
   }
 
   if (mode === 'praise') {
-    // Boss happily sipping the sole cup while giving a thumbs up!
     const sip = Math.sin(t * 2.8);
     rig.bodyPivot.position.y = Math.abs(sip) * 0.04;
     rig.leftArm.rotation.set(-2.15, 0, 0.3);
@@ -1110,8 +1165,7 @@ export function animateBossRig(rig: BossRig, mode: BossAnimMode, t: number): voi
   }
 
   if (mode === 'inspect_half_empty') {
-    // 1 hit taken: Boss holds up half-empty cup at eye level, squinting side-to-side suspiciously!
-    rig.leftArm.rotation.set(-0.6, 0.65, 0.25); // Hand on hip
+    rig.leftArm.rotation.set(-0.6, 0.65, 0.25);
     rig.rightArm.rotation.set(-1.55, 0.25, -0.05);
     rig.bossCup.rotation.z = Math.sin(t * 3.2) * 0.22;
     rig.headGroup.rotation.y = Math.sin(t * 2.8) * 0.28;
@@ -1120,13 +1174,11 @@ export function animateBossRig(rig: BossRig, mode: BossAnimMode, t: number): voi
   }
 
   if (mode === 'tilt_empty_drip') {
-    // 2 hits taken: Boss tilts the almost-empty cup completely upside down with stone-cold deadpan stare!
     rig.leftArm.rotation.set(-0.55, 0.65, 0.28);
     rig.rightArm.rotation.set(-1.62, 0.35, 0);
-    rig.bossCup.rotation.z = Math.PI; // Completely upside down!
-    rig.headGroup.rotation.set(0.05, 0.25, 0); // Deadpan stare right at runner!
+    rig.bossCup.rotation.z = Math.PI;
+    rig.headGroup.rotation.set(0.05, 0.25, 0);
 
-    // Single slow chai drop dripping down from the inverted cup onto the pavement!
     const dripCycle = (t * 0.85) % 1;
     rig.bossDripDrop.position.set(0.24, 1.56 - dripCycle * 1.38, 0.56);
     const scaleY = 1.0 + dripCycle * 0.7;
@@ -1161,13 +1213,37 @@ export function animateBossRig(rig: BossRig, mode: BossAnimMode, t: number): voi
   rig.headGroup.rotation.y = Math.sin(t * 1.2) * 0.18;
 }
 
-/** Pack of 3 Needy Customers — can chase frantically OR sip hot chai happily if bought Tier 3 VIP Tray! */
-export function createNeedyCustomerPack(): NeedyCustomerPack {
+/** Pack of 3 Needy Customers with grounded contact shadows and expressive chasing animations */
+export function createNeedyCustomerPack(contactShadowMap?: THREE.Texture): NeedyCustomerPack {
   const root = new THREE.Group();
   const configs = [
-    { shirt: 0x2563eb, pants: 0x1e293b, skin: 0xc28a62, offsetX: -1.12, offsetZ: 0.45, prop: 'laptop', phase: 0 },
-    { shirt: 0xea580c, pants: 0x292524, skin: 0xb0764f, offsetX: 0.0, offsetZ: 0.0, prop: 'printer', phase: 1.9 },
-    { shirt: 0x7c3aed, pants: 0x1f2937, skin: 0xc99268, offsetX: 1.12, offsetZ: 0.55, prop: 'router', phase: 3.7 },
+    {
+      shirt: 0x2563eb,
+      pants: 0x1e293b,
+      skin: 0xc28a62,
+      offsetX: -1.12,
+      offsetZ: 0.45,
+      prop: 'laptop',
+      phase: 0,
+    },
+    {
+      shirt: 0xea580c,
+      pants: 0x292524,
+      skin: 0xb0764f,
+      offsetX: 0.0,
+      offsetZ: 0.0,
+      prop: 'printer',
+      phase: 1.9,
+    },
+    {
+      shirt: 0x7c3aed,
+      pants: 0x1f2937,
+      skin: 0xc99268,
+      offsetX: 1.12,
+      offsetZ: 0.55,
+      prop: 'router',
+      phase: 3.7,
+    },
   ] as const;
 
   const members: NeedyCustomerMember[] = configs.map((cfg) => {
@@ -1180,17 +1256,12 @@ export function createNeedyCustomerPack(): NeedyCustomerPack {
     const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.8 });
     const hairMat = new THREE.MeshStandardMaterial({ color: 0x1a1715, roughness: 0.85 });
 
-    const shadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.48, 16),
-      new THREE.MeshBasicMaterial({ color: 0x0a0908, transparent: true, opacity: 0.4, depthWrite: false })
-    );
-    shadow.rotation.x = -Math.PI / 2;
-    shadow.position.y = 0.025;
-    mRoot.add(shadow);
+    mRoot.add(makeGroundShadowBlob(0.52, contactShadowMap));
 
     const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.62, 0.28), shirtMat);
     torso.position.y = 1.22;
     torso.castShadow = true;
+    torso.receiveShadow = true;
     bodyPivot.add(torso);
 
     const headGroup = new THREE.Group();
@@ -1198,6 +1269,7 @@ export function createNeedyCustomerPack(): NeedyCustomerPack {
     bodyPivot.add(headGroup);
 
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 14), skinMat);
+    head.castShadow = true;
     headGroup.add(head);
     const hair = new THREE.Mesh(
       new THREE.SphereGeometry(0.23, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.52),
@@ -1228,6 +1300,7 @@ export function createNeedyCustomerPack(): NeedyCustomerPack {
       g.position.set(x, y, 0);
       const mesh = new THREE.Mesh(new THREE.CylinderGeometry(w, w * 0.85, h, 10), mat);
       mesh.position.y = -h * 0.45;
+      mesh.castShadow = true;
       g.add(mesh);
       return g;
     };
@@ -1238,7 +1311,6 @@ export function createNeedyCustomerPack(): NeedyCustomerPack {
     const rightLeg = makeLimb(0.14, 0.88, 0.09, 0.82, pantsMat);
     bodyPivot.add(leftArm, rightArm, leftLeg, rightLeg);
 
-    // Optional steaming kulhad cup held in left hand when pacified by Tier 3 VIP Tray!
     const chaiCup = createMiniKulhad(false, 0.9).group;
     chaiCup.position.set(0, -0.48, 0.16);
     chaiCup.visible = false;
@@ -1328,10 +1400,9 @@ export function animateNeedyCustomerPack(
 
   pack.members.forEach((m, idx) => {
     m.chaiCup.visible = hasChai;
-    const ph = t * 14 + m.phaseOffset;
+    const ph = t * 15 + m.phaseOffset;
 
     if (mode === 'vip_sip_party') {
-      // Happily sipping hot masala chai together at PC Solution VIP Tea Party!
       const sip = Math.sin(t * 2.5 + idx * 1.4);
       m.root.rotation.y = idx === 0 ? 0.35 : idx === 2 ? -0.35 : 0;
       m.bodyPivot.position.y = Math.abs(Math.sin(t * 3 + idx)) * 0.04;
@@ -1344,7 +1415,6 @@ export function animateNeedyCustomerPack(
     }
 
     if (mode === 'jealous_peek') {
-      // Peeking around the side of PC Solution jealously during Double Chai Win!
       m.root.rotation.y = 0.55;
       m.bodyPivot.position.y = 0;
       m.headGroup.rotation.y = -0.35 + Math.sin(t * 2.5 + idx) * 0.15;
@@ -1356,7 +1426,6 @@ export function animateNeedyCustomerPack(
     }
 
     if (mode === 'pacified_follow') {
-      // Calm cheerful jog behind the runner sipping their chai cups!
       const calmPh = t * 9.5 + m.phaseOffset;
       const stride = Math.sin(calmPh);
       m.root.position.set(
@@ -1369,7 +1438,7 @@ export function animateNeedyCustomerPack(
       m.headGroup.rotation.y = Math.sin(t * 2.8 + idx) * 0.14;
       m.leftLeg.rotation.set(stride * 0.52, 0, 0);
       m.rightLeg.rotation.set(-stride * 0.52, 0, 0);
-      m.leftArm.rotation.set(-1.35 + Math.sin(t * 3 + idx) * 0.12, 0, 0.12); // Holding chai carefully!
+      m.leftArm.rotation.set(-1.35 + Math.sin(t * 3 + idx) * 0.12, 0, 0.12);
       m.rightArm.rotation.set(-0.65 + stride * 0.2, 0, -0.15);
       return;
     }
@@ -1410,15 +1479,16 @@ export function animateNeedyCustomerPack(
       return;
     }
 
-    const swayX = Math.sin(t * 3.8 + m.phaseOffset) * 0.24;
+    // Lively frantic chasing sprint with energetic arm waving!
+    const swayX = Math.sin(t * 4.2 + m.phaseOffset) * 0.26;
     m.root.position.set(targetX + m.baseOffsetX + swayX, 0, baseZ + m.baseOffsetZ);
     m.root.rotation.y = Math.PI;
     const stride = Math.sin(ph);
-    m.bodyPivot.position.y = Math.abs(Math.cos(ph)) * 0.12;
-    m.headGroup.rotation.y = Math.sin(t * 6 + idx) * 0.15;
-    m.leftLeg.rotation.set(stride * 0.9, 0, 0);
-    m.rightLeg.rotation.set(-stride * 0.9, 0, 0);
-    m.leftArm.rotation.set(-2.15 + stride * 0.45, 0, 0.22);
-    m.rightArm.rotation.set(-2.35 - stride * 0.42, 0, -0.18);
+    m.bodyPivot.position.y = Math.abs(Math.cos(ph)) * 0.14;
+    m.headGroup.rotation.y = Math.sin(t * 6.5 + idx) * 0.22;
+    m.leftLeg.rotation.set(stride * 0.95, 0, 0);
+    m.rightLeg.rotation.set(-stride * 0.95, 0, 0);
+    m.leftArm.rotation.set(-2.25 + stride * 0.55, 0, 0.34 + Math.sin(ph * 0.5) * 0.14);
+    m.rightArm.rotation.set(-2.42 - stride * 0.48, 0, -0.28);
   });
 }
